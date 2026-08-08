@@ -1,0 +1,16 @@
+
+
+strategist:
+  model: moonshotai/kimi-k2.6
+
+attacker:
+  model: moonshotai/kimi-k2.6
+
+evaluator:
+  model: moonshotai/kimi-k2.6
+
+reporter:
+  model: moonshotai/kimi-k2.6
+
+target:
+  model: moonshotai/kimi-k2.6
