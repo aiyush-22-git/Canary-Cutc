@@ -65,6 +65,8 @@ class AttackerAgent:
                 allow_private_targets=settings.allow_private_targets,
             )
         else:
+            if not isinstance(target_adapter, HttpTargetAdapter):
+                raise TypeError("Canary only supports HttpTargetAdapter targets")
             self.target_adapter = target_adapter
 
     def _llm_failure_output(self, branch: AttackBranch, error: Exception) -> AttackerOutput:
@@ -157,8 +159,20 @@ class AttackerAgent:
         if hasattr(self.target_adapter, "target_id"):
             self.target_adapter.target_id = target_id
 
-        adversarial_input = output.payload
-        result_tuple = self.target_adapter.execute_attack(output.payload, label=branch.technique_id)
+        adversarial_input = output.payload.strip()
+        if not adversarial_input:
+            return AttackResult(
+                run_id=run_id, target_id=target_id, attempt_number=branch.depth + 1,
+                strategy_type=strategy_type, prompt="", response="", success=False,
+                severity=AttackSeverity.INFO, score=0.0,
+                error="attacker returned an empty payload",
+                indicators={"_refused": True, "refusal_reason": "empty LLM payload"},
+                timestamp=datetime.utcnow(), technique_id=branch.technique_id,
+                capability_type=branch.capability_type, depth=branch.depth,
+                mutation_of_parent=output.mutation_of_parent, branch_id=branch.branch_id,
+                iteration=iteration,
+            )
+        result_tuple = self.target_adapter.execute_attack(adversarial_input, label=branch.technique_id)
         if isinstance(result_tuple, tuple):
             response, canary = result_tuple
         else:

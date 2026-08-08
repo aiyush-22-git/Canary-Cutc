@@ -160,7 +160,7 @@ def test_attacker_agent_refusal_short_circuits_target():
 
     from cyberredteam.llm.schemas import AttackerOutput
 
-    adapter = MagicMock()
+    adapter = MagicMock(spec=HttpTargetAdapter)
     agent = AttackerAgent(target_adapter=adapter)
     agent._attack_chain = MagicMock()
     agent.llm = MagicMock()

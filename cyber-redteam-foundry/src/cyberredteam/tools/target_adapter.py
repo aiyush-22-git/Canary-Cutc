@@ -7,6 +7,7 @@ behavior that will actually ship.
 
 import json
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit
 
 import requests
 
@@ -64,6 +65,11 @@ class HttpTargetAdapter(TargetAdapter):
             validated = validate_target_url(endpoint)
         except TargetValidationError as exc:
             if not allow_private_targets:
+                raise ValueError(str(exc)) from exc
+            # Local development may opt into private addresses, but never into
+            # non-HTTP schemes or malformed authorities.
+            parts = urlsplit(endpoint.strip())
+            if parts.scheme.lower() not in {"http", "https"} or not parts.netloc or parts.username or parts.password:
                 raise ValueError(str(exc)) from exc
             endpoint = endpoint.strip()
         else:

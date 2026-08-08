@@ -2,15 +2,6 @@
 
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
-
-import botocore.exceptions
-import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-
-from cyberredteam.llm.bedrock import ObservableLLM
 from cyberredteam.llm.factory import get_llm_for_agent, get_model_for_agent, load_prompt
 from cyberredteam.llm.schemas import (
     AttackerOutput,
@@ -23,9 +14,9 @@ from cyberredteam.storage.models import LLMCallRecord
 
 
 def test_factory_returns_observable_llm():
-    """The factory returns an ObservableLLM tagged with the agent + model.
+    """The factory returns a typed Backboard client tagged with agent + model.
 
-    (The underlying client is the injected FakeStructuredLLM — see conftest.)
+    (The underlying client is replaced by a test facade — see conftest.)
     """
     llm = get_llm_for_agent("strategist")
     assert llm is not None
@@ -95,74 +86,3 @@ def test_observability_logging_to_db():
             assert record.output_hash == "xyz789output"
             assert record.prompt_tokens == 150
             assert record.completion_tokens == 50
-
-
-# ─── Bedrock throttling retry ──────────────────────────────────────
-#
-# The autouse `_inject_fake_llm` fixture (conftest.py) always succeeds, so it
-# never exercises `.with_retry()`. These tests construct `ObservableLLM`
-# directly with a flaky fake `BaseChatModel` that raises
-# `botocore.exceptions.ClientError` a controlled number of times, bypassing
-# the fixture entirely. `max_retries` is patched small (2-3) since
-# `wait_exponential_jitter=True` sleeps real time between attempts.
-
-
-class _FlakyLLM(BaseChatModel):
-    """Real `BaseChatModel` subclass (like `ChatBedrockConverse`) that raises
-    a throttling `ClientError` on the first ``fail_times`` calls, then
-    returns a valid message. Subclassing `BaseChatModel` (rather than duck
-    typing `invoke`/`__or__`) means it composes into LCEL pipe chains
-    (``prompt | llm | StrOutputParser()``) exactly the way the real Bedrock
-    client does, since raw pipe-composition requires the object to itself be
-    a `Runnable`.
-    """
-
-    fail_times: int = 0
-    calls: int = 0
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        self.calls += 1
-        if self.calls <= self.fail_times:
-            raise botocore.exceptions.ClientError(
-                {"Error": {"Code": "ThrottlingException", "Message": "rate exceeded"}},
-                "Converse",
-            )
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
-
-    @property
-    def _llm_type(self) -> str:
-        return "flaky-fake"
-
-
-def test_build_text_chain_retries_throttling_and_succeeds(monkeypatch):
-    """A ClientError on the first N-1 attempts is retried and swallowed when
-    N-1 < max_retries; the chain ultimately returns the successful result."""
-    monkeypatch.setattr(
-        "cyberredteam.llm.bedrock.get_settings",
-        lambda: SimpleNamespace(max_retries=3),
-    )
-    flaky = _FlakyLLM(fail_times=2)  # fails twice, succeeds on the 3rd call
-    llm = ObservableLLM(llm=flaky, agent_name="test", deployment="test-model")
-
-    chain = llm.build_text_chain("system prompt")
-    result = llm.invoke_chain(chain, "hello")
-
-    assert result == "ok"
-    assert flaky.calls == 3
-
-
-def test_build_text_chain_reraises_clienterror_after_exhausting_retries(monkeypatch):
-    """When failures >= max_retries, the original ClientError propagates
-    (not a tenacity.RetryError)."""
-    monkeypatch.setattr(
-        "cyberredteam.llm.bedrock.get_settings",
-        lambda: SimpleNamespace(max_retries=2),
-    )
-    flaky = _FlakyLLM(fail_times=5)  # always throttles, well past max_retries
-    llm = ObservableLLM(llm=flaky, agent_name="test", deployment="test-model")
-
-    chain = llm.build_text_chain("system prompt")
-    with pytest.raises(botocore.exceptions.ClientError):
-        llm.invoke_chain(chain, "hello")
-
-    assert flaky.calls == 2

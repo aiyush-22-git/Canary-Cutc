@@ -51,7 +51,6 @@ cyber-redteam-foundry/
 │   ├── evaluator.md
 │   ├── reporter.md
 │   └── orchestrator.md
-├── target_agent/            # Demo victim agent — see target_agent/README.md
 ├── tests/
 ├── runs/                    # SQLite DBs, logs (git-ignored)
 ├── reports/                 # Generated reports (git-ignored)
@@ -83,7 +82,7 @@ cyber-redteam-foundry/
     │   ├── nodes.py         # Node implementations, incl. dispatch_attacker_branches
     │   └── orchestrator.py  # GraphOrchestrator entry point
     ├── llm/
-    │   ├── bedrock.py       # ChatBedrockConverse wrapper
+    │   ├── backboard.py     # Backboard HTTP LLM transport
     │   ├── factory.py       # get_llm_for_agent()
     │   └── schemas.py       # AttackerOutput, EvaluationResult, SecurityReport
     ├── storage/
@@ -115,14 +114,14 @@ a circular import (`langgraph/__init__.py` eagerly imports `graph.py` → `nodes
 
 ### Agents and models
 
-| # | Agent | Model (AWS Bedrock) | Role |
-|---|-------|---------------------|------|
-| 1 | Strategist | — (no LLM call) | Randomly dispatches up to 3 techniques per iteration as parallel branches |
-| 2 | Attacker | `deepseek.v3-v1:0` | One technique, one payload per branch — see [Attacker Contract](#attacker-contract--parallel-fan-out) |
-| 3 | Evaluator | `qwen.qwen3-coder-480b-a35b-v1:0` | Deterministic detectors + LLM judge, 4-case consensus; also owns the iterate-vs-report routing decision |
-| 4 | Reporter | `qwen.qwen3-coder-480b-a35b-v1:0` | Markdown + JSON audit reports |
+| # | Agent | Backboard model | Role |
+|---|-------|-----------------|------|
+| 1 | Strategist | configured per agent | Selects up to 3 techniques for the next parallel branches |
+| 2 | Attacker | configured per agent | Generates one original payload per branch and sends it over HTTP |
+| 3 | Evaluator | configured per agent | Combines detector signals with an LLM judge and owns iterate-vs-report routing |
+| 4 | Reporter | configured per agent | Produces Markdown and JSON audit reports |
 
-Models configured in `configs/models.yaml`. Credentials resolve via standard `boto3` chain (env vars, `~/.aws/credentials`, or instance role).
+Models configured in `configs/models.yaml`. All four agents use the server-side Backboard gateway. Missing Backboard credentials fail closed; no synthetic LLM output is generated.
 
 The strategist's technique selection is intentionally not an LLM call — it uses `random.sample` over the candidate `StrategyType` list, keeping selection fast and unpredictable to the target. An LLM-ranked method (`StrategistAgent.select_strategies()`) exists in `agents/strategist.py` for alternative selection strategies.
 
@@ -384,7 +383,7 @@ Interactive docs: `http://localhost:8001/docs` (Swagger UI) after `cyber-rt serv
 
 ```
 cyber-rt init                        # Create DBs, dirs, logging
-cyber-rt doctor                      # Verify env + test Bedrock connectivity
+cyber-rt doctor                      # Verify env + test Backboard connectivity
 cyber-rt list-strategies             # Show all strategies with ASI class
 cyber-rt run \
   --target-id <id> \
@@ -396,20 +395,20 @@ cyber-rt graph                       # Print LangGraph as Mermaid diagram
 cyber-rt server --port 8001          # Start FastAPI server
 ```
 
-`--strategies` is the **candidate pool**, not a fixed execution list — each iteration the
-strategist randomly samples up to 3 of them to run as parallel branches (see
-[LangGraph flow](#5-agent-pipeline)), so a campaign with 5 candidate strategies and 3
-`max_iterations` may never exercise all 5.
+`--strategies` is the **candidate pool**. The Backboard-backed Strategist selects up to 3
+of them for each parallel dispatch; invalid or empty model output fails the campaign rather
+than falling back to a static strategy or payload.
 
 ---
 
 ## Environment Config
 
 ```env
-# AWS Bedrock
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_DEFAULT_REGION=us-west-2
+# Backboard (server-side only)
+BACKBOARD_API_KEY=
+BACKBOARD_BASE_URL=https://app.backboard.io/api
+BACKBOARD_LLM_PROVIDER=openrouter
+BACKBOARD_MODEL_NAME=moonshotai/kimi-k2.6
 
 # API auth — used by GitHub Actions and server-side dashboard proxy only
 API_SECRET_KEY=
@@ -423,7 +422,7 @@ TARGET_ENDPOINT=https://preview.example.com/chat
 TARGET_API_KEY=                      # optional
 
 # Retry / concurrency
-MAX_RETRIES=3                        # Total attempts per LLM call (incl. first) on Bedrock throttling
+MAX_RETRIES=3                        # Total attempts per Backboard call (incl. first)
 MAX_CONCURRENT_RUNS=3                # Max simultaneous campaigns per API server process
 
 # LangSmith tracing (optional)
@@ -453,7 +452,7 @@ uv pip install -e ".[dev]"
 
 # 3. Configure
 cp .env.example .env
-# fill in AWS credentials and API_SECRET_KEY
+# fill in BACKBOARD_API_KEY and API_SECRET_KEY
 
 # 4. Initialise databases and verify
 cyber-rt init
@@ -475,14 +474,8 @@ docker run -p 8001:8001 --env-file .env redteam-backend
 docker compose up -d redteam-backend
 ```
 
-Port `8001` (FastAPI) is exposed. **The demo target agent is not part of the Compose stack** — run it separately:
-
-```bash
-cd cyber-redteam-foundry
-PYTHONPATH=src python -m target_agent.server --port 9000
-```
-
-The backend reaches it via `host.docker.internal:9000` (`extra_hosts` in `docker-compose.yml`), keeping the target isolated by construction.
+Port `8001` (FastAPI) is exposed. Canary does not ship or execute a bundled target agent;
+targets must be independently deployed HTTP(S) services that pass ownership verification.
 
 ---
 
@@ -492,7 +485,9 @@ The backend reaches it via `host.docker.internal:9000` (`extra_hosts` in `docker
 pytest tests/ -v --cov=src/cyberredteam --cov-report=term-missing
 ```
 
-111 tests, including a parallel-fan-out integration test (`TestParallelFanOut`) that exercises end-to-end random dispatch against mock LLMs — no AWS credentials required. Coverage report to terminal.
+The suite includes parallel fan-out, HTTP target validation, LLM payload contracts, differential
+release gating, and storage/API coverage. Tests that exercise the real provider require a
+server-side Backboard key; unit tests use typed test doubles. Coverage is reported to the terminal.
 # Runtime workflow
 
 Canary is an HTTP-based security CI system. A PR exposes a verified preview

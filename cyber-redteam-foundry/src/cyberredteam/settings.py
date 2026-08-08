@@ -6,12 +6,8 @@ from typing import Optional
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
-# Load .env into the process environment so that libraries reading os.environ
-# directly — notably boto3's credential chain (AWS_ACCESS_KEY_ID, etc.) — pick
-# up values placed in .env. pydantic-settings reads .env for its own fields,
-# but does NOT export to os.environ; without this, AWS creds in .env are
-# ignored and boto3 falls back to the default ~/.aws profile. override=False
-# keeps any credentials already exported in the shell authoritative.
+# Load .env into the process environment for the server-side Backboard transport.
+# override=False keeps credentials already exported in the shell authoritative.
 load_dotenv(override=False)
 
 

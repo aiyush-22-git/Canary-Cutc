@@ -2,7 +2,7 @@
 
 This deliberately lives under ``tests/`` and is injected by ``conftest.py``.
 It is a golden fixture for the test suite — it is NEVER importable into the
-runtime path. Runtime inference goes through Bedrock and fails loudly when
+runtime path. Runtime inference goes through Backboard and fails loudly when
 unconfigured; a security tool must never fabricate findings in production.
 """
 
@@ -36,8 +36,8 @@ class _FakeStructuredRunnable:
 
         schema_name = self.target_schema.__name__
         if schema_name == "AttackPlan":
-            fields["categories"] = ["prompt_injection", "indirect_injection"]
-            fields["priorities"] = ["high", "medium"]
+            fields["categories"] = ["prompt_injection", "tool_misuse", "sensitive_data_exposure"]
+            fields["priorities"] = ["high", "high", "high"]
             fields["rationale"] = "Target has public prompt interfaces."
         elif schema_name == "AttackerOutput":
             fields["status"] = "OK"
@@ -85,12 +85,12 @@ class _FakeStructuredRunnable:
 
 class _FakeMessage:
     content = "Mocked LLM text response."
-    # LangChain-normalized usage shape (matches ChatBedrockConverse)
+    # LangChain-normalized usage shape (matches Backboard)
     usage_metadata = {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}
 
 
 class FakeStructuredLLM:
-    """Mock ``BaseChatModel`` standing in for ``ChatBedrockConverse`` in tests.
+    """Mock ``BaseChatModel`` standing in for ``Backboard`` in tests.
 
     Returns ``RunnableLambda`` from ``with_structured_output`` so it composes
     with LCEL pipe chains (``ChatPromptTemplate | llm.with_structured_output(schema)``).

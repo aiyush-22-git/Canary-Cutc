@@ -3,8 +3,8 @@
 Two autouse fixtures keep the suite runnable without AWS credentials while
 ensuring the *runtime* code path never fabricates output:
 
-1. ``_inject_fake_llm`` patches ``factory.get_llm`` to return an
-   ObservableLLM wrapping the test-only ``FakeStructuredLLM``. Because
+1. ``_inject_fake_llm`` patches ``factory.get_llm`` to return a
+   test-only typed facade over ``FakeStructuredLLM``. Because
    ``get_llm_for_agent`` and the target adapters all call ``get_llm``
    internally, this covers every agent and the orchestrator.
 2. ``_bypass_api_auth`` overrides the FastAPI ``require_auth`` dependency so
@@ -15,18 +15,34 @@ ensuring the *runtime* code path never fabricates output:
 import pytest
 from fixtures.fake_llm import FakeStructuredLLM
 
-from cyberredteam.llm.bedrock import ObservableLLM
+class FakeObservableLLM:
+    """Test-only typed chain facade matching the Backboard agent contract."""
+
+    def __init__(self, agent_name: str, deployment: str):
+        self.agent_name = agent_name
+        self.deployment = deployment
+        self._llm = FakeStructuredLLM()
+
+    def build_structured_chain(self, system_prompt, output_schema):
+        return self._llm.with_structured_output(output_schema)
+
+    def build_text_chain(self, system_prompt):
+        return self._llm
+
+    def invoke_chain(self, chain, user_message, system_context=""):
+        return chain.invoke(user_message)
+
+    def invoke_structured(self, system_prompt, user_message, output_schema):
+        return self.invoke_chain(self.build_structured_chain(system_prompt, output_schema), user_message)
+
+    def invoke_text(self, system_prompt, user_message):
+        return "Mocked LLM text response."
 
 
 @pytest.fixture(autouse=True)
 def _inject_fake_llm(monkeypatch):
     def _fake_get_llm(model, agent_name="unknown", store=None):
-        return ObservableLLM(
-            llm=FakeStructuredLLM(),
-            agent_name=agent_name,
-            deployment=model,
-            store=store,
-        )
+        return FakeObservableLLM(agent_name=agent_name, deployment=model)
 
     monkeypatch.setattr("cyberredteam.llm.factory.get_llm", _fake_get_llm)
     yield

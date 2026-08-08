@@ -131,7 +131,7 @@ In remaining_risks, only write about findings with status confirmed.
 Do not extrapolate from failed attempts.
 
 In recommendations, every item must reference a specific finding_id:
-  CORRECT: "Implement Bedrock Guardrail denied-topic rule for employee_lookup
+  CORRECT: "Implement provider guardrail denied-topic rule for employee_lookup
   (finding a3f2b1c9d4e5f601, ASI02)."
   WRONG: "Implement strict tool access policies."
 

@@ -18,6 +18,7 @@ from typing import Callable, Dict, List, Optional
 from langgraph.types import Send
 
 from cyberredteam.agents.attacker import AttackerAgent
+from cyberredteam.agents.strategist import StrategistAgent
 from cyberredteam.agents.evaluator import EvaluatorAgent
 from cyberredteam.agents.reporter import ReporterAgent
 from cyberredteam.evaluation import taxonomy
@@ -47,12 +48,19 @@ def get_node_store() -> SQLiteStore:
         _store = SQLiteStore(settings.database_location)
     return _store
 
+def _strategist_factory(**kwargs) -> StrategistAgent:
+    return StrategistAgent(**kwargs)
+
 def _attacker_factory(**kwargs) -> AttackerAgent:
     return AttackerAgent(**kwargs)
 def _evaluator_factory(**kwargs) -> EvaluatorAgent:
     return EvaluatorAgent(**kwargs)
 _reporter_factory: Optional[Callable[..., ReporterAgent]] = None
 
+
+def set_strategist_factory(factory: Callable[[], StrategistAgent]) -> None:
+    global _strategist_factory
+    _strategist_factory = factory
 
 def set_attacker_factory(factory: Callable[[], AttackerAgent]) -> None:
     global _attacker_factory
@@ -74,18 +82,30 @@ def set_reporter_factory(factory: Callable[..., ReporterAgent]) -> None:
 # ---------------------------------------------------------------------------
 
 def node_strategist(state: RedTeamState) -> dict:
-    """Log-only pass-through ahead of the random parallel dispatch.
-
-    The default dispatch is deterministic and coverage-oriented. Strategies
-    are consumed in configured order in batches of three so a clean early
-    result cannot silently skip most of the security surface.
-    """
+    """Ask the Backboard-backed Strategist to choose the next attack branches."""
     logger.info(f"[Graph] Strategist node — Run {state['run_id']}")
-    candidates = state["strategies"]
-    logger.info(f"[Graph] Strategist candidates for coverage dispatch: {candidates}")
-
+    candidates = list(state.get("strategies") or [])
+    if not candidates:
+        raise RuntimeError("No attack strategies configured for the LLM strategist")
+    strategist = _strategist_factory(store=get_node_store())
+    selected = strategist.select_strategies(
+        target_id=state["target_id"],
+        risk_appetite="medium",
+        count=min(MAX_PARALLEL_BRANCHES, len(candidates)),
+        previous_vulnerabilities=[
+            str(result.indicators.get("objective", ""))
+            for result in state.get("attack_results", [])
+            if result.success
+        ],
+        available_subset=candidates,
+    )
+    if not selected:
+        raise RuntimeError("Strategist produced no executable branches")
+    selected_values = [strategy.value for strategy in selected]
+    logger.info(f"[Graph] Strategist selected: {selected_values}")
     return {
-        "log_messages": [f"Strategist ready to dispatch from {len(candidates)} candidate technique(s)"],
+        "strategies": selected_values,
+        "log_messages": [f"Strategist selected {len(selected_values)} LLM-generated branch assignments"],
     }
 
 
@@ -94,7 +114,7 @@ def node_strategist(state: RedTeamState) -> dict:
 # ---------------------------------------------------------------------------
 
 def dispatch_attacker_branches(state: RedTeamState) -> List[Send]:
-    """Dispatch the next configured batch of techniques in stable order.
+    """Dispatch the LLM-selected batch of techniques.
 
     Each selected technique becomes one independent AttackBranch (fresh
     depth=0, its own attempt budget) sent to `node_attacker_branch` as a
@@ -103,7 +123,7 @@ def dispatch_attacker_branches(state: RedTeamState) -> List[Send]:
     """
     candidates = [StrategyType(s) for s in state["strategies"]]
     if not candidates:
-        candidates = [StrategyType.PROMPT_INJECTION]
+        raise RuntimeError("Strategist did not provide executable strategies")
     offset = state.get("iteration", 0) * MAX_PARALLEL_BRANCHES
     chosen = candidates[offset : offset + MAX_PARALLEL_BRANCHES]
     if not chosen:
@@ -193,16 +213,16 @@ def node_attacker_branch(payload: dict) -> dict:
         f"technique {branch.capability_type}"
     )
 
-    target_adapter = None
-    if target_id.startswith("http://") or target_id.startswith("https://"):
-        from cyberredteam.tools.target_adapter import HttpTargetAdapter
-        target_adapter = HttpTargetAdapter(
-            endpoint=target_id,
-            headers=payload.get("target_headers"),
-            request_template=payload.get("target_request_template"),
-            response_path=payload.get("target_response_path"),
-            allow_private_targets=get_settings().allow_private_targets,
-        )
+    from cyberredteam.tools.target_adapter import HttpTargetAdapter
+    if not isinstance(target_id, str) or not target_id.lower().startswith(("http://", "https://")):
+        raise ValueError("Canary attacks only independently deployed HTTP(S) targets")
+    target_adapter = HttpTargetAdapter(
+        endpoint=target_id,
+        headers=payload.get("target_headers"),
+        request_template=payload.get("target_request_template"),
+        response_path=payload.get("target_response_path"),
+        allow_private_targets=get_settings().allow_private_targets,
+    )
 
     attacker = _attacker_factory(
         store=get_node_store(),
@@ -211,7 +231,7 @@ def node_attacker_branch(payload: dict) -> dict:
 
     replay_prompt = payload.get("replay_prompt")
     if replay_prompt:
-        response, canary = target_adapter.execute_attack(replay_prompt, label=branch.technique_id) if target_adapter else ("", None)
+        response, canary = target_adapter.execute_attack(replay_prompt, label=branch.technique_id)
         result = AttackResult(
             run_id=run_id,
             target_id=target_id,
