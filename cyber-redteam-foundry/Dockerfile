@@ -7,16 +7,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy manifest first for better layer caching
+# Keep the expensive CPU torch layer independent of application source edits.
+# This makes normal backend deployments reuse the 192 MB wheel layer.
 COPY pyproject.toml ./
-COPY src ./src
-COPY configs ./configs
-COPY prompts ./prompts
-
-# Pre-install CPU torch to avoid downloading the 4 GB CUDA wheel
 RUN pip install --no-cache-dir \
     "torch>=2.0.0" \
     --index-url https://download.pytorch.org/whl/cpu
+
+# Copy application sources only after torch so code-only deployments are fast.
+COPY src ./src
+COPY configs ./configs
+COPY prompts ./prompts
 
 # Install the project (torch requirement already satisfied above)
 RUN pip install --no-cache-dir -e .

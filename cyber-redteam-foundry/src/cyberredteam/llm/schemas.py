@@ -5,6 +5,7 @@ to guarantee well-typed JSON from every LLM call.  Free-form text
 is never parsed directly.
 """
 
+import json
 from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -204,26 +205,52 @@ class SecurityReport(BaseModel):
     """LLM-generated narrative sections for the final report."""
 
     executive_summary: str = Field(
-        ...,
+        default="",
         description="High-level summary of findings and risk level",
     )
     attack_campaign: str = Field(
-        ...,
+        default="",
         description="Description of the attack campaign and approach",
     )
     vulnerabilities_found: str = Field(
-        ...,
+        default="",
         description="Confirmed findings only — reference finding_id, component, asi_class",
     )
     evidence_summary: str = Field(
-        ...,
+        default="",
         description="Evidence supporting each confirmed finding; deterministic_hits first",
     )
     remaining_risks: str = Field(
-        ...,
+        default="",
         description="Open confirmed findings requiring manual triage",
     )
     assumptions: str = Field(
         default="",
         description="Deprecated: assumptions are now hardcoded in the reporter",
     )
+
+    @field_validator(
+        "executive_summary",
+        "attack_campaign",
+        "vulnerabilities_found",
+        "evidence_summary",
+        "remaining_risks",
+        "assumptions",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_narrative_text(cls, value: Any) -> str:
+        """Accept common JSON shapes emitted by hosted models.
+
+        Backboard providers occasionally return a list of paragraphs or a
+        structured object for a narrative field.  Preserve that content as
+        readable JSON instead of discarding the entire report on validation.
+        Missing fields use the explicit empty defaults above.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, tuple, dict)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
