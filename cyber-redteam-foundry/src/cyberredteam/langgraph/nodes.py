@@ -132,7 +132,12 @@ def dispatch_attacker_branches(state: RedTeamState) -> List[Send]:
     parallel LangGraph branch. LangGraph waits for all Send-spawned branches
     to complete before the downstream node (evaluator) runs.
     """
-    selected = state.get("selected_strategies") or state.get("strategies") or []
+    # Replay-only baseline runs must never fall back to configured strategies:
+    # doing so would silently launch a second exploratory Attacker campaign and
+    # defeat the cost and equivalence guarantees of baseline replay.
+    selected = [] if state.get("replay_only") else (
+        state.get("selected_strategies") or state.get("strategies") or []
+    )
     candidates = [StrategyType(s) for s in selected]
     if not candidates and not state.get("replay_cases"):
         raise RuntimeError("Strategist did not provide executable strategies")
