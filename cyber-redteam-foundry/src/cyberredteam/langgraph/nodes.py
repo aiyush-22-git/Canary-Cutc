@@ -87,6 +87,12 @@ def node_strategist(state: RedTeamState) -> dict:
     candidates = list(state.get("strategies") or [])
     if not candidates:
         raise RuntimeError("No attack strategies configured for the LLM strategist")
+    attempted = {
+        getattr(result.strategy_type, "value", str(result.strategy_type))
+        for result in state.get("attack_results", [])
+    }
+    remaining = [strategy for strategy in candidates if strategy not in attempted]
+    available = remaining or candidates
     strategist = _strategist_factory(store=get_node_store())
     selected = strategist.select_strategies(
         target_id=state["target_id"],
@@ -97,14 +103,14 @@ def node_strategist(state: RedTeamState) -> dict:
             for result in state.get("attack_results", [])
             if result.success
         ],
-        available_subset=candidates,
+        available_subset=available,
     )
     if not selected:
         raise RuntimeError("Strategist produced no executable branches")
     selected_values = [strategy.value for strategy in selected]
     logger.info(f"[Graph] Strategist selected: {selected_values}")
     return {
-        "strategies": selected_values,
+        "selected_strategies": selected_values,
         "log_messages": [f"Strategist selected {len(selected_values)} LLM-generated branch assignments"],
     }
 
@@ -121,13 +127,11 @@ def dispatch_attacker_branches(state: RedTeamState) -> List[Send]:
     parallel LangGraph branch. LangGraph waits for all Send-spawned branches
     to complete before the downstream node (evaluator) runs.
     """
-    candidates = [StrategyType(s) for s in state["strategies"]]
+    selected = state.get("selected_strategies") or state.get("strategies") or []
+    candidates = [StrategyType(s) for s in selected]
     if not candidates:
         raise RuntimeError("Strategist did not provide executable strategies")
-    offset = state.get("iteration", 0) * MAX_PARALLEL_BRANCHES
-    chosen = candidates[offset : offset + MAX_PARALLEL_BRANCHES]
-    if not chosen:
-        chosen = candidates[:MAX_PARALLEL_BRANCHES]
+    chosen = candidates[:MAX_PARALLEL_BRANCHES]
 
     logger.info(f"[Graph] Dispatching {len(chosen)} parallel attacker branch(es): {[c.value for c in chosen]}")
 

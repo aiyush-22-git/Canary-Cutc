@@ -35,6 +35,10 @@ class RedTeamState(TypedDict):
 
     # ── Attack configuration ─────────────────────────────────────
     strategies: List[str]
+    # The LLM strategist's current batch.  Keep ``strategies`` immutable as
+    # the configured security surface so coverage and multi-iteration
+    # dispatch cannot silently drop tactics after the first selection.
+    selected_strategies: List[str]
     max_iterations: int
     max_attempts_per_strategy: int
     timeout_seconds: int

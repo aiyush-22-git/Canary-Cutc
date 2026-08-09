@@ -102,6 +102,7 @@ class GraphOrchestrator:
                 "target_response_path": self.config.target_response_path,
                 "replay_cases": self.config.replay_cases,
                 "strategies": [s.value for s in self.config.strategy_types],
+                "selected_strategies": [],
                 "max_iterations": self.max_iterations,
                 "max_attempts_per_strategy": self.config.max_attempts,
                 "timeout_seconds": self.config.timeout_seconds,
