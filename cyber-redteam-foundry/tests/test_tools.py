@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cyberredteam.tools.sensitive_data import SensitiveDataExtractor
 from cyberredteam.tools.prompt_injection import PromptInjectionTool
 from cyberredteam.tools.tool_abuse import ToolAbuseTool
@@ -11,6 +13,15 @@ from cyberredteam.tools.jailbreak import JailbreakTool
 from cyberredteam.tools.instruction_hierarchy import InstructionHierarchyTool
 from cyberredteam.tools.workflow_manipulation import WorkflowManipulationTool
 from cyberredteam.tools.target_adapter import HttpTargetAdapter, _extract_by_path, _render_request_body
+
+
+@pytest.fixture(autouse=True)
+def _public_target_dns(monkeypatch):
+    """Keep adapter unit tests offline while modeling a public DNS answer."""
+    monkeypatch.setattr(
+        "cyberredteam.tools.target_adapter.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
 
 
 def test_sensitive_data_extractor():
@@ -243,3 +254,17 @@ def test_http_adapter_custom_headers_merged_with_defaults():
     # Explicit headers win over the default Bearer built from api_key
     assert kwargs["headers"]["Authorization"] == "Bearer override"
     assert kwargs["headers"]["X-API-Key"] == "custom-key"
+
+
+def test_http_adapter_rechecks_dns_before_request_and_rejects_rebinding():
+    """A hostname that rebinds to loopback must never reach the HTTP client."""
+    with patch(
+        "cyberredteam.tools.target_adapter.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("127.0.0.1", 443))],
+    ), patch("cyberredteam.tools.target_adapter.requests.Session.post") as mock_post:
+        adapter = HttpTargetAdapter(endpoint="https://agent.example.com/chat")
+        text, _ = adapter.execute_attack("hi", label="prompt_injection")
+
+    assert text == "(target resolution rejected)"
+    assert "non-public address" in (adapter.last_error or "")
+    mock_post.assert_not_called()

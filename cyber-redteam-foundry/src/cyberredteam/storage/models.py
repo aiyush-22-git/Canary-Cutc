@@ -1,6 +1,7 @@
 """SQLite database models and ORM definitions."""
 
 from datetime import datetime
+import threading
 
 from sqlalchemy import (
     JSON,
@@ -17,6 +18,11 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
+
+# Serialize schema initialization when concurrent background threads construct
+# stores for the same SQLite file. Hosted PostgreSQL schema changes still use
+# the deployment migration path.
+_init_db_lock = threading.Lock()
 
 
 class RunRecord(Base):
@@ -402,6 +408,7 @@ def _migrate_columns(engine) -> None:
 def init_db(db_path: str):
     """Initialize database with all tables, then migrate missing columns."""
     engine = get_engine(db_path)
-    Base.metadata.create_all(engine)
-    _migrate_columns(engine)
+    with _init_db_lock:
+        Base.metadata.create_all(engine)
+        _migrate_columns(engine)
     return engine

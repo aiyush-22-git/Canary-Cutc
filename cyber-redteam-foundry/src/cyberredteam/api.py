@@ -1,5 +1,6 @@
 """FastAPI web server for integrating the red team backend with the React frontend."""
 
+import hmac
 import json
 import logging
 import re
@@ -61,7 +62,10 @@ settings = get_settings()
 
 
 def _frontend_origins() -> list[str]:
-    return [origin.strip() for origin in settings.frontend_origins.split(",") if origin.strip()] or ["*"]
+    configured = [origin.strip() for origin in settings.frontend_origins.split(",") if origin.strip()]
+    # Never fall back to a wildcard: a browser dashboard must be explicitly
+    # allowlisted, while these localhost origins keep local development usable.
+    return configured or ["http://localhost:5173", "http://localhost:3000"]
 
 
 def require_auth(request: Request, authorization: Optional[str] = Header(None)) -> None:
@@ -76,18 +80,21 @@ def require_auth(request: Request, authorization: Optional[str] = Header(None)) 
     if request.url.path == "/health":
         return
     scheme, _, token = (authorization or "").partition(" ")
-    if scheme == "Bearer" and settings.api_secret_key and token == settings.api_secret_key:
+    if scheme == "Bearer" and settings.api_secret_key and hmac.compare_digest(token, settings.api_secret_key):
         return
     parsed = parse_project_token(token) if scheme == "Bearer" else None
-    if parsed and request.url.path == "/api/ci/releases":
+    required_scope = _project_token_scope(request)
+    if parsed and required_scope and settings.token_pepper:
         lookup_prefix, _ = parsed
         store = SQLiteStore(settings.database_location)
         try:
             with store.SessionLocal() as session:
                 record = session.scalar(select(ProjectTokenRecord).where(ProjectTokenRecord.lookup_prefix == lookup_prefix))
                 expired = record.expires_at is not None and record.expires_at <= datetime.utcnow() if record else True
-                if record and record.revoked_at is None and not expired and verify_project_token(token, record.token_hash, pepper=settings.token_pepper):
+                scopes = set(record.scopes or []) if record else set()
+                if record and required_scope in scopes and record.revoked_at is None and not expired and verify_project_token(token, record.token_hash, pepper=settings.token_pepper):
                     request.state.project_token_project_id = record.project_id
+                    request.state.project_token_scopes = scopes
                     return
         finally:
             store.close()
@@ -96,8 +103,31 @@ def require_auth(request: Request, authorization: Optional[str] = Header(None)) 
     raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
 
 
+def _project_token_scope(request: Request) -> str | None:
+    """Map CI routes to the least-privileged project-token scope."""
+    path = request.url.path
+    if path == "/api/ci/releases" and request.method.upper() == "POST":
+        return "release:create"
+    if path.startswith("/api/releases/") and request.method.upper() == "GET":
+        return "release:read"
+    if path.startswith("/api/releases/") and path.endswith("/cancel") and request.method.upper() == "POST":
+        return "release:create"
+    return None
+
+
 def _authorized_targets() -> list[str]:
     return [t.strip() for t in settings.allowed_targets.split(",") if t.strip()]
+
+
+def _configured_target_headers() -> dict[str, str]:
+    """Return server-side target credentials without persisting them in a release.
+
+    The optional key is injected only into the outbound HTTP adapter. It is
+    never included in project/release payloads, reports, or browser responses.
+    """
+    if not settings.target_api_key:
+        return {}
+    return {"Authorization": f"Bearer {settings.target_api_key}"}
 
 
 # Auth is enforced on every route via the app-level dependency.
@@ -223,6 +253,7 @@ def _release_strategies(values: List[str]) -> List[StrategyType]:
 
 # Active background runs cache to track running orchestrators
 active_runs: Dict[str, str] = {}
+_active_run_db_locations: Dict[str, str] = {}
 
 # Lock to coordinate concurrent run registration and status updates.
 # Note: this lock only serializes access within a single running API server process
@@ -233,8 +264,57 @@ _active_runs_lock = threading.Lock()
 
 
 def _running_count() -> int:
-    """Count the number of runs currently in 'running' state."""
-    return sum(1 for v in active_runs.values() if v == "running")
+    """Count active runs, reconciling stale process-cache entries with SQLite.
+
+    Background workers persist their terminal status before updating the
+    process-local cache.  A request arriving in that small window must not be
+    rejected as if the completed run still consumed a concurrency slot.  Keys
+    without a durable row are retained as active: this keeps the in-process
+    guard conservative and supports callers that register work before
+    persistence succeeds.
+    """
+    for run_id, status in list(active_runs.items()):
+        if status != "running":
+            active_runs.pop(run_id, None)
+            _active_run_db_locations.pop(run_id, None)
+    running_ids = [run_id for run_id, status in active_runs.items() if status == "running"]
+    if not running_ids:
+        return 0
+
+    store = SQLiteStore(settings.database_location)
+    try:
+        with store.SessionLocal() as session:
+            rows = session.execute(
+                select(RunRecord.run_id, RunRecord.status).where(RunRecord.run_id.in_(running_ids))
+            ).all()
+        durable_status = {run_id: status for run_id, status in rows}
+    except Exception:
+        # If the database is temporarily locked/unavailable, fail closed and
+        # preserve the previous in-memory behavior rather than over-admitting.
+        return len(running_ids)
+    finally:
+        store.close()
+
+    terminal = {"completed", "failed", "cancelled"}
+    current_db = str(settings.database_url or settings.db_path)
+    count = 0
+    for run_id in running_ids:
+        # A test/dev SQLite rotation or a process restart can leave an old
+        # cache entry behind. It belongs to a different durable store and
+        # must not consume this process's current concurrency slot.
+        if _active_run_db_locations.get(run_id, current_db) != current_db:
+            continue
+        status = durable_status.get(run_id)
+        if status is None:
+            # API-generated IDs are persisted before another request can
+            # normally observe them. Unknown human/test keys remain counted
+            # conservatively.
+            if not re.fullmatch(r"[0-9a-f]{8}(?:[0-9a-f]{4})?", run_id):
+                count += 1
+            continue
+        if status not in terminal:
+            count += 1
+    return count
 
 
 def _run_cancellation_requested(run_id: str) -> bool:
@@ -253,6 +333,39 @@ def _run_cancellation_requested(run_id: str) -> bool:
         store.close()
 
 
+def _release_cancellation_requested(release_id: str) -> bool:
+    """Read a release cancellation flag for candidate and baseline workers."""
+    store = SQLiteStore(settings.database_location)
+    try:
+        with store.SessionLocal() as session:
+            return bool(
+                session.scalar(
+                    select(ReleaseRecord.cancellation_requested)
+                    .where(ReleaseRecord.release_id == release_id)
+                    .limit(1)
+                )
+            )
+    finally:
+        store.close()
+
+
+def _is_cancelled(run_id: str, release_id: Optional[str] = None) -> bool:
+    return _release_cancellation_requested(release_id) if release_id else _run_cancellation_requested(run_id)
+
+
+def _mark_run_cancelled(run_id: str) -> None:
+    """Persist cancellation for a run when a release-level request stops it."""
+    store = SQLiteStore(settings.database_location)
+    try:
+        with store.SessionLocal() as session:
+            run = session.scalar(select(RunRecord).where(RunRecord.run_id == run_id))
+            if run and run.status in {"queued", "running"}:
+                run.status = "cancelled"
+                session.commit()
+    finally:
+        store.close()
+
+
 def run_orchestrator_thread(
     run_id: str,
     target_id: str,
@@ -264,12 +377,14 @@ def run_orchestrator_thread(
     target_response_path: Optional[str] = None,
     replay_cases: Optional[List[Dict[str, str]]] = None,
     replay_only: bool = False,
+    cancellation_release_id: Optional[str] = None,
 ):
     """Run the LangGraph workflow in a background thread."""
     try:
         logger.info(f"[API] Starting background run {run_id} against {target_id}")
-        if _run_cancellation_requested(run_id):
+        if _is_cancelled(run_id, cancellation_release_id):
             active_runs[run_id] = "cancelled"
+            _mark_run_cancelled(run_id)
             logger.info("[API] Run %s was cancelled before orchestration", run_id)
             return
         config = RunConfig(
@@ -278,7 +393,7 @@ def run_orchestrator_thread(
             strategy_types=strategy_types,
             max_attempts=max_attempts,
             description=f"UI Triggered Run on {target_id}",
-            target_headers=target_headers or {},
+            target_headers=target_headers or _configured_target_headers(),
             target_request_template=target_request_template,
             target_response_path=target_response_path,
             replay_cases=replay_cases or [],
@@ -291,11 +406,17 @@ def run_orchestrator_thread(
             max_iterations=max_iterations,
         )
         orchestrator.run()
-        active_runs[run_id] = "cancelled" if _run_cancellation_requested(run_id) else "completed"
+        cancelled = _is_cancelled(run_id, cancellation_release_id)
+        active_runs[run_id] = "cancelled" if cancelled else "completed"
+        if cancelled:
+            _mark_run_cancelled(run_id)
         logger.info(f"[API] Run {run_id} completed successfully")
     except Exception as e:
         logger.error(f"[API] Run {run_id} failed: {e}")
-        active_runs[run_id] = "cancelled" if _run_cancellation_requested(run_id) else "failed"
+        cancelled = _is_cancelled(run_id, cancellation_release_id)
+        active_runs[run_id] = "cancelled" if cancelled else "failed"
+        if cancelled:
+            _mark_run_cancelled(run_id)
         # Update DB status to failed
         try:
             store = SQLiteStore(settings.database_location)
@@ -303,7 +424,7 @@ def run_orchestrator_thread(
                 stmt = select(RunRecord).where(RunRecord.run_id == run_id)
                 run = session.scalar(stmt)
                 if run:
-                    run.status = "failed"
+                    run.status = "cancelled" if cancelled else "failed"
                     session.commit()
             store.close()
         except Exception as dbe:
@@ -362,18 +483,23 @@ def run_release_orchestrator_thread(
         max_attempts=max(4, len(strategy_types) * 2),
         target_request_template=project.request_template,
         target_response_path=project.response_path,
+        target_headers=_configured_target_headers(),
         replay_cases=replay_cases,
+        cancellation_release_id=release_id,
     )
 
     # A release cancellation may arrive while an in-flight HTTP/LLM call is
     # finishing.  Do not start the baseline replay or differential finalizer
     # after the operator has requested cancellation.
-    if _run_cancellation_requested(run_id):
+    if _release_cancellation_requested(release_id):
         logger.info("[API] Release %s cancelled before baseline replay", release_id)
         return
 
     if baseline_endpoint and replay_cases:
         baseline_replay_run_id = f"{run_id}-baseline"
+        with _active_runs_lock:
+            active_runs[baseline_replay_run_id] = "running"
+            _active_run_db_locations[baseline_replay_run_id] = str(settings.database_url or settings.db_path)
         replay_store = SQLiteStore(settings.database_location)
         try:
             replay_store.save_run_start(baseline_replay_run_id, baseline_endpoint)
@@ -392,15 +518,22 @@ def run_release_orchestrator_thread(
             max_attempts=max(2, len(replay_cases)),
             target_request_template=baseline_request_template or project.request_template,
             target_response_path=baseline_response_path or project.response_path,
+            target_headers=_configured_target_headers(),
             replay_cases=replay_cases,
             replay_only=True,
+            cancellation_release_id=release_id,
         )
+        if _release_cancellation_requested(release_id):
+            logger.info("[API] Release %s cancelled during baseline replay", release_id)
+            return
     store = SQLiteStore(settings.database_location)
     try:
         with store.SessionLocal() as session:
             run = session.get(RunRecord, run_id)
+            release = session.get(ReleaseRecord, release_id)
+            if release and (release.cancellation_requested or release.status == "cancelled"):
+                return
             if run and run.status == "completed":
-                release = session.get(ReleaseRecord, release_id)
                 project_record = session.get(ProjectRecord, release.project_id) if release else None
                 if release is None or project_record is None:
                     raise ValueError("Release or project disappeared before comparison")
@@ -461,6 +594,7 @@ def _start_release(
             )
         run_id = uuid.uuid4().hex[:12]
         active_runs[run_id] = "running"
+        _active_run_db_locations[run_id] = str(settings.database_url or settings.db_path)
 
     store = SQLiteStore(settings.database_location)
     try:
@@ -494,6 +628,7 @@ def _start_release(
             response_payload = release_payload(release)
     except Exception:
         active_runs.pop(run_id, None)
+        _active_run_db_locations.pop(run_id, None)
         raise
     finally:
         store.close()
@@ -618,6 +753,12 @@ def list_project_baselines(project_id: str):
 @app.post("/api/projects/{project_id}/tokens", status_code=201)
 def create_project_token(project_id: str, body: ProjectTokenCreateRequest):
     """Issue a project-scoped CI credential; the raw value is returned once."""
+    if not settings.token_pepper:
+        raise HTTPException(status_code=503, detail="Project-token authentication is not configured (set TOKEN_PEPPER).")
+    scopes = sorted(set(body.scopes))
+    allowed_scopes = {"release:create", "release:read"}
+    if not scopes or not set(scopes).issubset(allowed_scopes):
+        raise HTTPException(status_code=422, detail="Unsupported project-token scope")
     store = SQLiteStore(settings.database_location)
     try:
         with store.SessionLocal() as session:
@@ -628,7 +769,7 @@ def create_project_token(project_id: str, body: ProjectTokenCreateRequest):
                 project_id=project_id,
                 lookup_prefix=issued.lookup_prefix,
                 token_hash=issued.token_hash,
-                scopes=sorted(set(body.scopes)),
+                scopes=scopes,
             )
             session.add(record)
             session.commit()
@@ -800,6 +941,11 @@ def create_ci_release(body: CiReleaseRequest, request: Request):
     store = SQLiteStore(settings.database_location)
     try:
         with store.SessionLocal() as session:
+            scoped_project_id = getattr(request.state, "project_token_project_id", None)
+            if scoped_project_id:
+                scoped_project = session.get(ProjectRecord, scoped_project_id)
+                if scoped_project is None or (scoped_project.repository or "").lower() != body.repository.lower():
+                    raise HTTPException(status_code=403, detail="Project token is not authorized for this repository")
             project = upsert_ci_project(
                 session,
                 {
@@ -813,7 +959,6 @@ def create_ci_release(body: CiReleaseRequest, request: Request):
                     "gate": body.gate,
                 },
             )
-            scoped_project_id = getattr(request.state, "project_token_project_id", None)
             if scoped_project_id and scoped_project_id != project.project_id:
                 raise HTTPException(status_code=403, detail="Project token is not authorized for this repository")
             if body.baseline_endpoint:
@@ -1140,6 +1285,7 @@ def create_run(req: RunRequest, background_tasks: BackgroundTasks):
             )
         run_id = uuid.uuid4().hex[:8]
         active_runs[run_id] = "running"
+        _active_run_db_locations[run_id] = str(settings.database_url or settings.db_path)
 
     # Map UI strategies to StrategyType values
     strategy_mapping = {
@@ -1655,6 +1801,7 @@ async def campaign_run_sse(req: CampaignRunRequest):
             )
         run_id = uuid.uuid4().hex[:8]
         active_runs[run_id] = "running"
+        _active_run_db_locations[run_id] = str(settings.database_url or settings.db_path)
 
     store = SQLiteStore(settings.database_location)
     store.save_run_start(run_id, target_id)

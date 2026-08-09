@@ -6,13 +6,18 @@ behavior that will actually ship.
 """
 
 import json
+import socket
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
 import requests
 
 from cyberredteam.logging import setup_logging
-from cyberredteam.security.target import TargetValidationError, validate_target_url
+from cyberredteam.security.target import (
+    TargetValidationError,
+    validate_resolved_addresses,
+    validate_target_url,
+)
 
 logger = setup_logging()
 _PROMPT_PLACEHOLDER = '"{{PROMPT}}"'
@@ -87,6 +92,23 @@ class HttpTargetAdapter(TargetAdapter):
         self.last_status_code: Optional[int] = None
         logger.info("HttpTargetAdapter initialized → %s", self.endpoint)
 
+    def _validate_runtime_resolution(self) -> None:
+        """Re-resolve and validate the target immediately before each request.
+
+        Registration-time DNS checks alone are vulnerable to a hostname
+        rebinding after verification.  This check does not replace network
+        egress controls or pin the socket address, but it fails closed when
+        the current DNS answer contains any non-public address.
+        """
+        if self.allow_private_targets:
+            return
+        parsed = urlsplit(self.endpoint)
+        try:
+            addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, parsed.port, type=socket.SOCK_STREAM)}
+        except (OSError, socket.gaierror) as exc:
+            raise TargetValidationError("target hostname could not be resolved at request time") from exc
+        validate_resolved_addresses(addresses)
+
     def _build_headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -112,6 +134,7 @@ class HttpTargetAdapter(TargetAdapter):
             request_body = {"message": payload}
 
         try:
+            self._validate_runtime_resolution()
             session = requests.Session()
             session.trust_env = False
             response = session.post(
@@ -141,6 +164,10 @@ class HttpTargetAdapter(TargetAdapter):
                 )
             return response_text, None
 
+        except TargetValidationError as exc:
+            self.last_error = f"target resolution rejected: {exc}"
+            logger.warning("HTTP target resolution rejected for %s: %s", self.endpoint, exc)
+            return "(target resolution rejected)", None
         except requests.exceptions.Timeout:
             self.last_error = f"target agent timed out after {self.timeout}s"
             logger.warning("HTTP target timed out after %ss", self.timeout)

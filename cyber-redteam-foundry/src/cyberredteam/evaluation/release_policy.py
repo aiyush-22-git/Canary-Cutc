@@ -56,6 +56,10 @@ class GatePolicy:
         if self.block_on & self.warn_on:
             overlap = ", ".join(sorted(item.value for item in self.block_on & self.warn_on))
             raise ValueError(f"block_on and warn_on must not overlap: {overlap}")
+        uncovered = set(Severity) - (self.block_on | self.warn_on)
+        if uncovered:
+            values = ", ".join(sorted(item.value for item in uncovered))
+            raise ValueError(f"every severity must be in block_on or warn_on: {values}")
         if self.max_new_blocking_findings is not None and self.max_new_blocking_findings < 0:
             raise ValueError("max_new_blocking_findings must be non-negative or None")
         if (

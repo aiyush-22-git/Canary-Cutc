@@ -67,7 +67,10 @@ class Settings(BaseSettings):
     # Run Configuration
     # Total attempts per LLM call (including the first), not retries-after-first.
     # Applied by the Backboard transport for transient request failures.
-    max_retries: int = 3
+    # Total attempts per LLM/job invocation, including the first call. Keep
+    # the production default at one: a release gate must not multiply paid
+    # model calls silently. Increase deliberately for a controlled deployment.
+    max_retries: int = 1
     max_concurrent_runs: int = 3
     timeout_seconds: int = 30
     deterministic_seed: int = 42

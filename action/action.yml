@@ -203,10 +203,17 @@ runs:
             --header "Authorization: Bearer ${CANARY_API_TOKEN}" \
             "${CANARY_API_URL%/}/api/releases/${release_id}")"
           status="$(jq --raw-output '.status' <<<"$release")"
-          if [[ "$status" == "completed" || "$status" == "failed" ]]; then break; fi
-          sleep 10
+          if [[ "$status" == "completed" || "$status" == "failed" || "$status" == "cancelled" ]]; then break; fi
+          sleep 5
         done
+        if [[ "$status" == "cancelled" ]]; then
+          echo "Agent Canary release $release_id was cancelled" >&2
+          exit 1
+        fi
         if [[ "$status" != "completed" && "$status" != "failed" ]]; then
+          curl --silent --show-error --request POST \
+            --header "Authorization: Bearer ${CANARY_API_TOKEN}" \
+            "${CANARY_API_URL%/}/api/releases/${release_id}/cancel" >/dev/null || true
           echo "Agent Canary timed out waiting for release $release_id" >&2
           exit 1
         fi

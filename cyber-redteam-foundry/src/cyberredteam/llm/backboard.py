@@ -79,6 +79,8 @@ class BackboardObservableLLM:
                     headers={"X-API-Key": self.api_key, "Content-Type": "application/json"},
                     json=payload,
                     timeout=settings.timeout_seconds,
+                    follow_redirects=False,
+                    trust_env=False,
                 )
                 response.raise_for_status()
                 body = response.json()

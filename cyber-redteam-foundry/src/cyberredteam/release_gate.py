@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import re
 import socket
 import uuid
@@ -50,6 +49,7 @@ from cyberredteam.storage.models import (
     RunRecord,
     SecurityRegressionRecord,
 )
+from cyberredteam.security.target import TargetValidationError, validate_resolved_addresses
 
 DEFAULT_STRATEGIES = [
     "prompt_injection",
@@ -90,17 +90,11 @@ def validate_public_http_endpoint(endpoint: str, *, allow_private: bool = False)
     except socket.gaierror as error:
         raise ValueError("Endpoint hostname could not be resolved") from error
 
-    for raw_address in addresses:
-        address = ipaddress.ip_address(raw_address)
-        if not allow_private and (
-            address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_multicast
-            or address.is_reserved
-            or address.is_unspecified
-        ):
-            raise ValueError("Endpoint must not resolve to a private or reserved address")
+    if not allow_private:
+        try:
+            validate_resolved_addresses(addresses)
+        except TargetValidationError as error:
+            raise ValueError(f"Endpoint must not resolve to a private or reserved address ({error})") from error
 
 
 def project_payload(project: ProjectRecord) -> dict[str, Any]:

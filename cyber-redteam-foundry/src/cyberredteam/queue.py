@@ -57,7 +57,9 @@ def enqueue_release(release_id: str) -> str:
         release_id,
         job_id=job_id,
         job_timeout=get_settings().release_job_timeout_seconds,
-        retry=Retry(max=get_settings().max_retries, interval=[30, 120, 300]),
+        # Settings expresses total attempts, while RQ's ``max`` is retries
+        # after the first delivery.
+        retry=Retry(max=max(0, get_settings().max_retries - 1), interval=[30, 120, 300]),
         result_ttl=86400,
         failure_ttl=604800,
     )
