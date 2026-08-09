@@ -237,6 +237,22 @@ def _running_count() -> int:
     return sum(1 for v in active_runs.values() if v == "running")
 
 
+def _run_cancellation_requested(run_id: str) -> bool:
+    """Read the durable cancellation flag without trusting process memory."""
+    store = SQLiteStore(settings.database_location)
+    try:
+        with store.SessionLocal() as session:
+            return bool(
+                session.scalar(
+                    select(ReleaseRecord.cancellation_requested)
+                    .where(ReleaseRecord.run_id == run_id)
+                    .limit(1)
+                )
+            )
+    finally:
+        store.close()
+
+
 def run_orchestrator_thread(
     run_id: str,
     target_id: str,
@@ -271,11 +287,11 @@ def run_orchestrator_thread(
             max_iterations=max_iterations,
         )
         orchestrator.run()
-        active_runs[run_id] = "completed"
+        active_runs[run_id] = "cancelled" if _run_cancellation_requested(run_id) else "completed"
         logger.info(f"[API] Run {run_id} completed successfully")
     except Exception as e:
         logger.error(f"[API] Run {run_id} failed: {e}")
-        active_runs[run_id] = "failed"
+        active_runs[run_id] = "cancelled" if _run_cancellation_requested(run_id) else "failed"
         # Update DB status to failed
         try:
             store = SQLiteStore(settings.database_location)
@@ -344,6 +360,13 @@ def run_release_orchestrator_thread(
         target_response_path=project.response_path,
         replay_cases=replay_cases,
     )
+
+    # A release cancellation may arrive while an in-flight HTTP/LLM call is
+    # finishing.  Do not start the baseline replay or differential finalizer
+    # after the operator has requested cancellation.
+    if _run_cancellation_requested(run_id):
+        logger.info("[API] Release %s cancelled before baseline replay", release_id)
+        return
 
     if baseline_endpoint and replay_cases:
         baseline_replay_run_id = f"{run_id}-baseline"
@@ -866,6 +889,32 @@ def get_release(release_id: str):
             release = session.get(ReleaseRecord, release_id)
             if release is None:
                 raise HTTPException(status_code=404, detail="Release not found")
+            return release_payload(release)
+    finally:
+        store.close()
+
+
+@app.post("/api/releases/{release_id}/cancel")
+def cancel_release(release_id: str):
+    """Request a durable release cancellation and stop future phases."""
+    store = SQLiteStore(settings.database_location)
+    try:
+        with store.SessionLocal() as session:
+            release = session.get(ReleaseRecord, release_id)
+            if release is None:
+                raise HTTPException(status_code=404, detail="Release not found")
+            if release.status in {"completed", "failed", "cancelled"}:
+                raise HTTPException(status_code=409, detail=f"Release is already {release.status}")
+            release.cancellation_requested = True
+            release.status = "cancelled"
+            release.summary = {"reason": "cancelled by operator"}
+            release.completed_at = datetime.utcnow()
+            if release.run_id:
+                run = session.scalar(select(RunRecord).where(RunRecord.run_id == release.run_id))
+                if run and run.status in {"queued", "running"}:
+                    run.status = "cancelled"
+                active_runs[release.run_id] = "cancelled"
+            session.commit()
             return release_payload(release)
     finally:
         store.close()

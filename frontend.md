@@ -372,6 +372,11 @@ The CI request includes `repository`, `commit_sha`, `ref`, `event_name`,
 when `decision === "block"`; `warn` remains a successful workflow with a warning
 summary.
 
+To stop a running release, call `POST /api/releases/{release_id}/cancel`. The
+server persists `cancelled` and prevents any pending baseline replay; an
+already-in-flight HTTP/LLM request is allowed to return, then no later phase is
+started.
+
 ## 7. Live execution and cost behavior
 
 Candidate releases run the configured LLM Strategist, Attacker, Evaluator, and
