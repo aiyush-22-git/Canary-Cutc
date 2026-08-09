@@ -3,6 +3,7 @@
 import hashlib
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -415,11 +416,20 @@ class EvaluatorAgent:
         return result
 
     def evaluate_batch(self, results: List[AttackResult]) -> List[AttackResult]:
-        """Evaluate multiple attack results."""
-        evaluated = []
-        for result in results:
-            evaluated.append(self.evaluate(result))
-        return evaluated
+        """Evaluate a fan-out batch concurrently while preserving input order.
+
+        Attacker branches are already parallel. Keeping evaluator calls
+        sequential made a release take the sum of several provider latencies
+        (and could exceed the CI job timeout). Each result is independent, so
+        evaluate the batch concurrently and return results in deterministic
+        input order for stable persistence and reporting.
+        """
+        if not results:
+            return []
+        workers = min(len(results), 3)
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="canary-evaluator") as pool:
+            futures = [pool.submit(self.evaluate, result) for result in results]
+            return [future.result() for future in futures]
 
     def compute_overall_metrics(self, results: List[AttackResult]) -> Dict:
         """Compute overall metrics across all results deterministically."""
