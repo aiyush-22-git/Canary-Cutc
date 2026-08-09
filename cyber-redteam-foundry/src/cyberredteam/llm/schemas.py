@@ -198,6 +198,12 @@ class EvaluationResult(BaseModel):
                 return "low"
         return str(v)
 
+    @field_validator("component", "adversarial_input_hash", mode="before")
+    @classmethod
+    def _coerce_optional_audit_text(cls, v: Any) -> str:
+        """Hosted judges occasionally emit JSON null for optional audit text."""
+        return "" if v is None else str(v)
+
 
 # ─── Reporter ────────────────────────────────────────────────────────
 
