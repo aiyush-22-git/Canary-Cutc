@@ -1,6 +1,6 @@
 # Canary backend → frontend integration guide
 
-Last verified: 2026-08-09 · branch `backend` · deployed commit `9224dfb`
+Last verified: 2026-08-09 · branch `backend` · deployed commit `32d2fae`
 
 Live demo API: `http://13.206.233.65`<br>
 Live CompanyAgent target: `http://13.201.9.115/chat`
