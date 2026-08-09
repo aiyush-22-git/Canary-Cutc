@@ -1,5 +1,13 @@
 # Canary backend → frontend integration guide
 
+Last verified: 2026-08-09 · branch `backend` · deployed commit `9224dfb`
+
+Live demo API: `http://13.206.233.65`<br>
+Live CompanyAgent target: `http://13.201.9.115/chat`
+
+These are hackathon HTTP endpoints. Use an HTTPS reverse proxy before exposing
+them to real users.
+
 This document describes the backend that is currently running on the `backend`
 branch. It is the contract for connecting a React/Next/Vite frontend to Canary.
 
@@ -22,9 +30,10 @@ Authorization: Bearer <API_SECRET_KEY>
 
 `API_SECRET_KEY` is a server credential. Do not put it in a `VITE_*`, `NEXT_PUBLIC_*`,
 or other browser-bundled variable. A production frontend should call the backend
-through a same-origin server route/proxy that adds the header. The current backend
-does not implement GitHub OAuth; OAuth/session exchange must be added at the
-frontend gateway before exposing a public dashboard.
+through a same-origin server route/proxy that adds the header. GitHub OAuth/session
+handling is not implemented inside this FastAPI service. Add OAuth in the frontend
+server or an auth gateway, then have that trusted server call Canary with the
+server-side bearer token. CI uses a separate project-scoped token.
 
 Backend CORS is controlled by `FRONTEND_ORIGINS` (comma-separated origins). It does
 not use cookies (`allow_credentials=false`).
@@ -49,6 +58,10 @@ export async function canaryFetch<T>(path: string, init: RequestInit = {}): Prom
   return response.json() as Promise<T>;
 }
 ```
+
+For browser-only Vite code, proxy `/api` through the frontend host and attach the
+token server-side. Never use `VITE_API_TOKEN` or `NEXT_PUBLIC_*` for a Canary
+secret.
 
 ## 2. Health and status
 
@@ -80,7 +93,7 @@ create project
 
 ```json
 {
-  "name": "CompanyBot",
+  "name": "CompanyAgent",
   "endpoint": "https://preview.example.com/chat",
   "environment": "preview",
   "request_template": "{\"message\":\"{{PROMPT}}\"}",
@@ -150,7 +163,7 @@ Response:
 ```
 
 For project registration, the target must prove ownership. Generate a random token
-of at least 16 characters and have the CompanyBot return it in either the
+of at least 16 characters and have the CompanyAgent return it in either the
 `X-Canary-Verification` response header or a JSON `canary_verification` field.
 Then call `POST /api/projects/{project_id}/target/verify`:
 
@@ -210,14 +223,18 @@ export interface Release {
 export interface Coverage {
   percentage?: number;
   configured_strategies?: number;
-  executed_strategies?: number;
-  successful_executions?: number;
-  failed_executions?: number;
-  skipped_executions?: number;
-  attack_cases_attempted?: number;
-  attack_cases_completed?: number;
+  attempted_strategies?: number;
+  successful_strategies?: number;
+  failed_strategies?: number;
+  skipped_strategies?: number;
+  planned_attack_cases?: number;
+  attempted_attack_cases?: number;
+  completed_attack_cases?: number;
 }
 ```
+
+Coverage measures executed security-test surface, not the number of findings. A
+strategy that completes safely still contributes to coverage.
 
 Poll `GET /api/releases/{release_id}` every 2–5 seconds until `status` is
 `completed`, `failed`, or `cancelled`. Do not infer the decision from scores;
@@ -265,6 +282,10 @@ judge score/verdict, confidence, rationale, and taxonomy.
 
 `GET /api/releases/{release_id}/report.md` returns the same report as plain text
 for a download button.
+
+Use `indeterminate` as a manual-review/WARN state. It means one side of an
+equivalent attack case did not produce a conclusive execution; it is not proof of
+a vulnerability and must not be rendered as one.
 
 ## 4. Legacy campaign UI (live SSE)
 
@@ -345,7 +366,26 @@ The raw token is returned once. Store it as a GitHub Actions secret, never in th
 frontend. It is accepted only by `POST /api/ci/releases`; all dashboard routes
 require the server API secret.
 
-## 7. Error handling
+The CI request includes `repository`, `commit_sha`, `ref`, `event_name`,
+`environment`, `endpoint`, `request_template`, `response_path`, `strategies`, and
+`gate`. The action polls the returned `release_id` and fails the workflow only
+when `decision === "block"`; `warn` remains a successful workflow with a warning
+summary.
+
+## 7. Live execution and cost behavior
+
+Candidate releases run the configured LLM Strategist, Attacker, Evaluator, and
+Reporter agents. With an accepted baseline, Canary replays persisted attack cases
+against both candidate and baseline. The baseline side is replay-only: it does
+not launch a second exploratory Strategist campaign, avoiding duplicate hosted
+model calls while keeping the comparison equivalent.
+
+The deployed service uses bounded transport retries (`MAX_RETRIES=1`) and a
+120-second request timeout. Poll every 2–5 seconds and show a running state until
+the server returns `completed`, `failed`, or `cancelled`. A release can be `WARN`
+when an LLM execution is indeterminate; do not silently convert that to `PASS`.
+
+## 8. Error handling
 
 Frontend error handling should use the HTTP status and `detail` field:
 
@@ -360,7 +400,7 @@ Frontend error handling should use the HTTP status and `detail` field:
 Never display raw stack traces or secret-bearing request headers. Preserve the
 server's `failure_code` and `detail` in an operator-visible error state.
 
-## 8. Suggested frontend pages
+## 9. Suggested frontend pages
 
 1. **Projects** — list projects, environment, verified endpoint, active baseline.
 2. **Project detail** — target verification, strategies/gate configuration, recent releases.
@@ -380,7 +420,7 @@ DETECTORS: <hits and scores>
 TAXONOMY: <ASI / ATLAS>
 ```
 
-## 9. Local frontend smoke test
+## 10. Local frontend smoke test
 
 ```bash
 curl http://localhost:8001/health
