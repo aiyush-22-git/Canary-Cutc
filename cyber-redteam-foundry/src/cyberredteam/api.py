@@ -268,6 +268,10 @@ def run_orchestrator_thread(
     """Run the LangGraph workflow in a background thread."""
     try:
         logger.info(f"[API] Starting background run {run_id} against {target_id}")
+        if _run_cancellation_requested(run_id):
+            active_runs[run_id] = "cancelled"
+            logger.info("[API] Run %s was cancelled before orchestration", run_id)
+            return
         config = RunConfig(
             run_id=run_id,
             target_id=target_id,
