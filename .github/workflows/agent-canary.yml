@@ -1,0 +1,32 @@
+name: Agent Canary release gate
+
+on:
+  pull_request:
+  push:
+    branches: [backend, main]
+  workflow_dispatch:
+
+jobs:
+  agent-canary:
+    # This file is a copy-ready integration template. A target repository sets
+    # the scoped token and exposes its preview URL as a repository variable or
+    # replaces it with its deployment job output.
+    # Map secrets to the job environment before evaluating the condition;
+    # GitHub Actions does not allow the secrets context in job-level `if`.
+    env:
+      CANARY_API_URL: ${{ secrets.CANARY_API_URL }}
+      CANARY_PROJECT_TOKEN: ${{ secrets.CANARY_PROJECT_TOKEN }}
+    if: ${{ env.CANARY_API_URL != '' && env.CANARY_PROJECT_TOKEN != '' && vars.CANARY_TARGET_URL != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Agent Canary
+        uses: ./action
+        with:
+          api-url: ${{ secrets.CANARY_API_URL }}
+          api-token: ${{ secrets.CANARY_PROJECT_TOKEN }}
+          target-url: ${{ vars.CANARY_TARGET_URL }}
+          baseline-url: ${{ vars.CANARY_BASELINE_URL }}
+          target-verification-token: ${{ secrets.CANARY_TARGET_VERIFICATION_TOKEN }}

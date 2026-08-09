@@ -1,0 +1,97 @@
+{
+  "family": "agent-canary-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "${ECS_EXECUTION_ROLE_ARN}",
+  "taskRoleArn": "${CANARY_TASK_ROLE_ARN}",
+  "containerDefinitions": [
+    {
+      "name": "canary-worker",
+      "image": "${ECR_IMAGE}",
+      "essential": true,
+      "command": [
+        "canary-worker"
+      ],
+      "environment": [
+        {
+          "name": "RELEASE_EXECUTION_MODE",
+          "value": "rq"
+        },
+        {
+          "name": "RELEASE_QUEUE_NAME",
+          "value": "canary-releases"
+        },
+        {
+          "name": "RELEASE_JOB_TIMEOUT_SECONDS",
+          "value": "3600"
+        },
+        {
+          "name": "MAX_RETRIES",
+          "value": "3"
+        },
+        {
+          "name": "BACKBOARD_BASE_URL",
+          "value": "https://app.backboard.io/api"
+        },
+        {
+          "name": "BACKBOARD_LLM_PROVIDER",
+          "value": "${BACKBOARD_LLM_PROVIDER}"
+        },
+        {
+          "name": "BACKBOARD_MODEL_NAME",
+          "value": "${BACKBOARD_MODEL_NAME}"
+        },
+        {
+          "name": "BACKBOARD_BASE_URL",
+          "value": "https://app.backboard.io/api"
+        },
+        {
+          "name": "BACKBOARD_LLM_PROVIDER",
+          "value": "openrouter"
+        },
+        {
+          "name": "BACKBOARD_MODEL_NAME",
+          "value": "moonshotai/kimi-k2.6"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "${DATABASE_URL_SECRET_ARN}"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "${REDIS_URL_SECRET_ARN}"
+        },
+        {
+          "name": "API_SECRET_KEY",
+          "valueFrom": "${API_SECRET_KEY_SECRET_ARN}"
+        },
+        {
+          "name": "TOKEN_PEPPER",
+          "valueFrom": "${TOKEN_PEPPER_SECRET_ARN}"
+        },
+        {
+          "name": "BACKBOARD_API_KEY",
+          "valueFrom": "${BACKBOARD_API_KEY_SECRET_ARN}"
+        },
+        {
+          "name": "BACKBOARD_API_KEY",
+          "valueFrom": "${BACKBOARD_API_KEY_SECRET_ARN}"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/agent-canary",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ]
+}
