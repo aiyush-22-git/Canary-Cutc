@@ -247,6 +247,7 @@ def run_orchestrator_thread(
     target_request_template: Optional[str] = None,
     target_response_path: Optional[str] = None,
     replay_cases: Optional[List[Dict[str, str]]] = None,
+    replay_only: bool = False,
 ):
     """Run the LangGraph workflow in a background thread."""
     try:
@@ -261,6 +262,7 @@ def run_orchestrator_thread(
             target_request_template=target_request_template,
             target_response_path=target_response_path,
             replay_cases=replay_cases or [],
+            replay_only=replay_only,
         )
         orchestrator = GraphOrchestrator(
             config=config,
@@ -364,6 +366,7 @@ def run_release_orchestrator_thread(
             target_request_template=baseline_request_template or project.request_template,
             target_response_path=baseline_response_path or project.response_path,
             replay_cases=replay_cases,
+            replay_only=True,
         )
     store = SQLiteStore(settings.database_location)
     try:

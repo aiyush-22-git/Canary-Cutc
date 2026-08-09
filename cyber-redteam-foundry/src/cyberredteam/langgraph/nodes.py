@@ -84,6 +84,11 @@ def set_reporter_factory(factory: Callable[..., ReporterAgent]) -> None:
 def node_strategist(state: RedTeamState) -> dict:
     """Ask the Backboard-backed Strategist to choose the next attack branches."""
     logger.info(f"[Graph] Strategist node — Run {state['run_id']}")
+    if state.get("replay_only"):
+        return {
+            "selected_strategies": [],
+            "log_messages": ["Replay-only run: skipped exploratory strategist"],
+        }
     candidates = list(state.get("strategies") or [])
     if not candidates:
         raise RuntimeError("No attack strategies configured for the LLM strategist")
@@ -129,7 +134,7 @@ def dispatch_attacker_branches(state: RedTeamState) -> List[Send]:
     """
     selected = state.get("selected_strategies") or state.get("strategies") or []
     candidates = [StrategyType(s) for s in selected]
-    if not candidates:
+    if not candidates and not state.get("replay_cases"):
         raise RuntimeError("Strategist did not provide executable strategies")
     chosen = candidates[:MAX_PARALLEL_BRANCHES]
 

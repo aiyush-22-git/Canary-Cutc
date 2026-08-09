@@ -56,6 +56,7 @@ class RunConfig(BaseModel):
     # project has an accepted baseline. Each item has strategy, technique_id,
     # and prompt keys. The evaluator still owns the verdict.
     replay_cases: List[Dict[str, str]] = Field(default_factory=list)
+    replay_only: bool = False
 
 
 class AttackPrompt(BaseModel):
