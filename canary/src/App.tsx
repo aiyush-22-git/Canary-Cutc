@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import './index.css'
-import DashboardPage from './pages/DashboardPage'
+import Navbar from './components/Navbar'
+import Hero from './components/Hero'
 import RunAuditPage from './pages/RunAuditPage'
 import FindingsPage from './pages/FindingsPage'
 import RedTeamPage from './pages/RedTeamPage'
@@ -16,5 +17,14 @@ export default function App() {
   if (page === 'findings') return <FindingsPage onBack={nav('home')} onRunAudit={nav('audit')} onRedTeam={nav('redteam')} />
   if (page === 'redteam')  return <RedTeamPage  onBack={nav('home')} onRunAudit={nav('audit')} onFindings={nav('findings')} />
 
-  return <DashboardPage onRunAudit={nav('audit')} onFindings={nav('findings')} onRedTeam={nav('redteam')} />
+  return (
+    <main className="bg-black min-h-screen font-mono">
+      <Navbar
+        onRunAudit={nav('audit')}
+        onFindings={nav('findings')}
+        onRedTeam={nav('redteam')}
+      />
+      <Hero />
+    </main>
+  )
 }

@@ -1,9 +1,7 @@
-const TICKER_TEXT =
-  '[ THREAT DETECTED: ASI-03 Prompt Injection ] · [ CAMPAIGN RX-041823 ACTIVE ] · [ AGENT: LLM-TOOL-BRIDGE COMPROMISED ] · [ FINDING: SEVERITY CRITICAL ] · [ REPLAY VERIFICATION IN PROGRESS ] · '
-
-interface HeroProps {
-  onRunAudit?: () => void
-}
+import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
+import { createProjectRelease, getLlmTelemetry, getProjects, getProjectReleases, getReleaseReport } from '../lib/api'
+import type { LlmTelemetryRecord, ProjectRecord, ReleaseRecord, ReleaseReport } from '../lib/api'
 
 function CyberWord({ word, startDelay }: { word: string; startDelay: number }) {
   return (
@@ -22,13 +20,75 @@ function CyberWord({ word, startDelay }: { word: string; startDelay: number }) {
   )
 }
 
-export default function Hero({ onRunAudit }: HeroProps) {
+export default function Hero() {
+  const [project, setProject] = useState<ProjectRecord | null>(null)
+  const [release, setRelease] = useState<ReleaseRecord | null>(null)
+  const [report, setReport] = useState<ReleaseReport | null>(null)
+  const [telemetry, setTelemetry] = useState<LlmTelemetryRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [showReleaseForm, setShowReleaseForm] = useState(false)
+  const [commitSha, setCommitSha] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const loadLiveData = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const projects = await getProjects()
+      const releasesByProject = await Promise.all(projects.map((item) => getProjectReleases(item.project_id)))
+      const newestIndex = releasesByProject.reduce((best, rows, index) => {
+        const candidate = rows[0]?.created_at || ''
+        const current = releasesByProject[best]?.[0]?.created_at || ''
+        return candidate > current ? index : best
+      }, 0)
+      const selectedProject = projects[newestIndex] || projects[0] || null
+      const selectedRelease = releasesByProject[newestIndex]?.[0] || null
+      setProject(selectedProject)
+      setRelease(selectedRelease)
+      const [latestReport, telemetryRows] = await Promise.all([
+        selectedRelease ? getReleaseReport(selectedRelease.release_id) : Promise.resolve(null),
+        getLlmTelemetry(500),
+      ])
+      setReport(latestReport)
+      setTelemetry(telemetryRows)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Live Canary data is unavailable')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void loadLiveData() }, [])
+
+  const tokenTotal = useMemo(() => telemetry.reduce((sum, call) => sum + (call.total_tokens || 0), 0), [telemetry])
+  const releaseStatus = loading ? 'SYNCING' : (release?.decision || release?.status || 'NO RUN').toUpperCase()
+  const coverage = release?.coverage?.percentage
+  const tickerText = `[ LIVE RELEASE: ${release?.release_id.slice(0, 8) || 'PENDING'} ] · [ DECISION: ${releaseStatus} ] · [ COVERAGE: ${coverage == null ? '—' : `${coverage}%`} ] · [ AWS BACKEND: CONNECTED ] · [ TELEMETRY: ${telemetry.length} LLM CALLS ] · `
+
   const stats = [
-    { value: 'LIVE', label: 'Status', cls: 'animate-hero-stat-1', red: true },
-    { value: 'ASI10', label: 'Coverage', cls: 'animate-hero-stat-2', red: true },
-    { value: 'ATLAS', label: 'Framework', cls: 'animate-hero-stat-3', red: false },
-    { value: 'x500°', label: 'Attack Depth', cls: 'animate-hero-stat-3', red: false },
+    { value: releaseStatus, label: 'Decision', cls: 'animate-hero-stat-1', red: releaseStatus === 'BLOCK' || releaseStatus === 'WARN' },
+    { value: coverage == null ? '—' : `${coverage}%`, label: 'Coverage', cls: 'animate-hero-stat-2', red: true },
+    { value: `${project?.strategies.length || 0}`, label: 'Strategies', cls: 'animate-hero-stat-3', red: false },
+    { value: `${telemetry.length}`, label: 'LLM Calls', cls: 'animate-hero-stat-3', red: false },
   ]
+
+  const submitRelease = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!project || !commitSha.trim()) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      await createProjectRelease(project.project_id, { commit_sha: commitSha.trim(), environment: project.environment })
+      setCommitSha('')
+      setShowReleaseForm(false)
+      await loadLiveData()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to start the release gate')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <section className="relative w-full h-screen overflow-hidden bg-black">
@@ -71,7 +131,7 @@ export default function Hero({ onRunAudit }: HeroProps) {
         {/* Threat ticker */}
         <div className="overflow-hidden mb-6 md:mb-8">
           <div className="animate-ticker whitespace-nowrap text-red-600/70 text-[10px] tracking-[0.15em] uppercase font-light">
-            {(TICKER_TEXT).repeat(3)}
+            {tickerText.repeat(3)}
           </div>
         </div>
 
@@ -91,9 +151,9 @@ export default function Hero({ onRunAudit }: HeroProps) {
 
             {/* Meta line */}
             <div className="animate-hero-meta mt-6 flex items-center gap-6 text-white/40 text-[10px] sm:text-xs tracking-wider uppercase font-light">
-              <span>Campaign: RX-041823</span>
+              <span>Release: {release?.release_id.slice(0, 8) || 'Awaiting data'}</span>
               <span className="animate-hero-divider w-8 h-[1px] bg-red-600/40 inline-block" />
-              <span>Mode: Sigma</span>
+              <span>Environment: {project?.environment || '—'}</span>
             </div>
 
             <div className="mt-4 max-w-xl border-t border-white/[0.08] pt-3 text-[8px] uppercase tracking-[0.16em] text-white/25 font-mono">
@@ -103,11 +163,11 @@ export default function Hero({ onRunAudit }: HeroProps) {
                   System_Status: <span className="text-emerald-300/70">Nominal</span>
                 </span>
                 <span className="h-px w-5 bg-white/10" />
-                <span>Threat_Level: <span className="text-red-400/70">Elevated</span></span>
+                <span>Decision: <span className="text-red-400/70">{releaseStatus}</span></span>
                 <span className="h-px w-5 bg-white/10" />
-                <span>Scan_ID: <span className="text-white/40">0x7F-A91C</span></span>
+                <span>Target: <span className="text-white/40">{project?.endpoint ? new URL(project.endpoint).host : '—'}</span></span>
                 <span className="h-px w-5 bg-white/10" />
-                <span>TS: <span className="text-white/40">2026-08-11 14:32:08Z</span></span>
+                <span>Tokens: <span className="text-white/40">{tokenTotal.toLocaleString()}</span></span>
               </div>
             </div>
           </div>
@@ -117,18 +177,18 @@ export default function Hero({ onRunAudit }: HeroProps) {
             <div className="flex items-center justify-between border-b border-white/[0.08] pb-3 text-[8px] uppercase tracking-[0.2em] text-white/30 font-mono">
               <span className="flex items-center gap-2">
                 <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse-red" />
-                Audit Console
+                Live Release Console
               </span>
-              <span className="text-red-400/70">Live // 01</span>
+              <span className="text-red-400/70">AWS // SQLite</span>
             </div>
 
             <div className="flex items-center justify-between text-[8px] uppercase tracking-[0.16em] text-white/25 font-mono">
-              <span>Target: Agent Surface</span>
-              <span className="text-white/35">Stream: SSE</span>
+              <span>Project: {project?.name || 'Loading'}</span>
+              <span className="text-white/35">{telemetry.length} persisted calls</span>
             </div>
 
             <p className="animate-hero-description text-white/60 text-xs sm:text-sm leading-relaxed font-light">
-              Autonomously discovering, evaluating, and remediating vulnerabilities across AI agent surfaces. Multi-agent orchestration exposes the most critical attack paths in enterprise agentic infrastructure.
+              {error || (loading ? 'Reading persisted release evidence from the Canary backend.' : `Latest release compares the candidate to its accepted baseline. ${report ? `${report.regressions.filter((item) => item.classification === 'regression').length} new regressions, ${report.regressions.filter((item) => item.classification === 'resolved').length} resolved.` : 'No completed release selected.'}`)}
             </p>
 
             {/* Stats */}
@@ -148,17 +208,19 @@ export default function Hero({ onRunAudit }: HeroProps) {
             {/* CTA row */}
             <div className="animate-hero-cta flex gap-4">
               <button
-                onClick={onRunAudit}
+                onClick={() => setShowReleaseForm((open) => !open)}
                 className="group flex items-center gap-2 border border-red-500/70 bg-red-600/90 px-6 py-3 text-white text-xs uppercase tracking-[0.15em] font-medium hover:bg-red-500 hover:shadow-[0_0_24px_rgba(239,68,68,0.4)] transition-all duration-300"
               >
                 <span className="text-red-100 transition-transform duration-300 group-hover:translate-x-1">&gt;_</span>
-                Run Audit
+                Start Release
               </button>
-              <button className="group flex items-center gap-2 border border-white/20 px-6 py-3 text-white text-xs uppercase tracking-[0.15em] font-light hover:border-red-500/70 hover:bg-red-950/20 transition-all duration-300">
+              <button onClick={() => void loadLiveData()} className="group flex items-center gap-2 border border-white/20 px-6 py-3 text-white text-xs uppercase tracking-[0.15em] font-light hover:border-red-500/70 hover:bg-red-950/20 transition-all duration-300">
                 <span className="text-red-400/70 transition-transform duration-300 group-hover:translate-x-1">&gt;_</span>
-                Request Access
+                Refresh Live
               </button>
             </div>
+            {showReleaseForm && <form onSubmit={submitRelease} className="border border-red-500/30 bg-black/60 p-3"><label className="block text-[8px] uppercase tracking-[0.16em] text-white/40">Candidate commit SHA<input required minLength={4} maxLength={128} pattern="[A-Za-z0-9._/-]+" value={commitSha} onChange={(event) => setCommitSha(event.target.value)} placeholder="abcd1234" className="mt-2 w-full border border-white/15 bg-black px-3 py-2 text-xs text-white outline-none focus:border-red-400" /></label><button disabled={submitting} className="mt-3 border border-red-500/70 px-4 py-2 text-[9px] uppercase tracking-[0.15em] text-red-100 disabled:opacity-40">{submitting ? 'Starting…' : 'Run security gate'}</button></form>}
+            {report && <details className="border-t border-white/[0.08] pt-3 text-[9px] text-white/45"><summary className="cursor-pointer uppercase tracking-[0.16em] text-red-300/70">Persisted evidence and telemetry</summary><div className="mt-3 max-h-32 space-y-2 overflow-auto pr-2">{report.regressions.map((item) => <div key={item.regression_id} className="border border-white/[0.08] p-2"><p className="uppercase text-white/65">{item.classification} · {item.severity || 'unrated'}</p><p className="mt-1 line-clamp-2">{String(item.candidate_evidence?.response || item.baseline_evidence?.response || item.reason || 'No evidence')}</p></div>)}</div></details>}
           </div>
         </div>
       </div>
