@@ -15,13 +15,12 @@ const NAV_LINKS = [
 ]
 
 interface NavbarProps {
-  onRunAudit?: () => void
   onLogoClick?: () => void
   onRedTeam?: () => void
   onFindings?: () => void
 }
 
-export default function Navbar({ onRunAudit, onLogoClick, onRedTeam, onFindings }: NavbarProps) {
+export default function Navbar({ onLogoClick, onRedTeam, onFindings }: NavbarProps) {
   const handlers: Record<string, (() => void) | undefined> = {
     redteam: onRedTeam, findings: onFindings,
   }
@@ -94,10 +93,10 @@ export default function Navbar({ onRunAudit, onLogoClick, onRedTeam, onFindings 
             <span className="text-red-400/70">0x7F-A91C</span>
           </div>
 
-          {[...NAV_LINKS, { label: 'Run Audit', key: 'audit' }, { label: 'Request Access', key: 'access' }, { label: 'About', key: 'about' }].map(({ label, key }, i) => (
+          {[...NAV_LINKS, { label: 'Request Access', key: 'access' }, { label: 'About', key: 'about' }].map(({ label, key }, i) => (
             <button
               key={key}
-              onClick={() => { setMenuOpen(false); if (key === 'audit') onRunAudit?.(); else handlers[key]?.() }}
+              onClick={() => { setMenuOpen(false); handlers[key]?.() }}
               className="group flex w-full items-baseline justify-between border-b border-white/[0.14] py-4 sm:py-5 text-left transition-all duration-300 hover:border-red-500/75 hover:shadow-[0_8px_24px_-18px_rgba(239,68,68,0.9)]"
               style={{ transitionProperty: 'opacity, transform', transitionDuration: '0.45s', transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)', transitionDelay: menuOpen ? `${i * 55 + 120}ms` : '0ms', opacity: menuOpen ? 1 : 0, transform: menuOpen ? 'translateY(0)' : 'translateY(24px)' }}
             >

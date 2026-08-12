@@ -5,7 +5,6 @@ import { createProjectRelease, getLlmTelemetry, getProjects, getProjectReleases,
 import type { LlmTelemetryRecord, ProjectRecord, ReleaseRecord, ReleaseReport } from '../lib/api'
 
 interface DashboardPageProps {
-  onRunAudit: () => void
   onFindings: () => void
   onRedTeam: () => void
 }
@@ -34,7 +33,7 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: DashboardPageProps) {
+export default function DashboardPage({ onFindings, onRedTeam }: DashboardPageProps) {
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectId, setProjectId] = useState('')
   const [releases, setReleases] = useState<ReleaseRecord[]>([])
@@ -121,7 +120,7 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
 
   return (
     <main className="min-h-screen bg-[#03090b] font-mono text-white">
-      <Navbar onRunAudit={onRunAudit} onFindings={onFindings} onRedTeam={onRedTeam} onLogoClick={() => { window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+      <Navbar onFindings={onFindings} onRedTeam={onRedTeam} onLogoClick={() => { window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
       <div className="mx-auto max-w-7xl px-6 pb-16 pt-28 sm:px-10 lg:px-16">
         <header className="flex flex-col justify-between gap-6 border-b border-white/10 pb-8 md:flex-row md:items-end">
           <div>

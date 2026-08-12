@@ -198,11 +198,10 @@ function RunDetailPanel({ detail }: { detail: RunDetail }) {
 
 interface RedTeamPageProps {
   onBack: () => void
-  onRunAudit: () => void
   onFindings?: () => void
 }
 
-export default function RedTeamPage({ onBack, onRunAudit, onFindings }: RedTeamPageProps) {
+export default function RedTeamPage({ onBack, onFindings }: RedTeamPageProps) {
   const [incidents,        setIncidents]        = useState<Incident[]>([])
   const [loading,          setLoading]          = useState(true)
   const [error,            setError]            = useState<string | null>(null)
@@ -275,7 +274,7 @@ export default function RedTeamPage({ onBack, onRunAudit, onFindings }: RedTeamP
   // ─── RENDER ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-black text-white font-mono">
-      <Navbar onRunAudit={onRunAudit} onLogoClick={onBack} onFindings={onFindings} />
+      <Navbar onLogoClick={onBack} onFindings={onFindings} />
       {/* ── SECTION 01: LIVE INCIDENT FEED ── */}
       <section className="px-6 sm:px-10 md:px-16 lg:px-20 py-16 border-b border-white/10 pt-36">
 
