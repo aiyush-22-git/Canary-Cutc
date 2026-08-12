@@ -151,7 +151,7 @@ export default function Hero() {
 
             {/* Meta line */}
             <div className="animate-hero-meta mt-6 flex items-center gap-6 text-white/40 text-[10px] sm:text-xs tracking-wider uppercase font-light">
-              <span>Release: {release?.release_id.slice(0, 8) || 'Awaiting data'}</span>
+              <span>Latest security check: {release?.release_id.slice(0, 8) || 'Awaiting data'}</span>
               <span className="animate-hero-divider w-8 h-[1px] bg-red-600/40 inline-block" />
               <span>Environment: {project?.environment || '—'}</span>
             </div>
@@ -160,7 +160,7 @@ export default function Hero() {
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <span className="flex items-center gap-1.5 text-white/35">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.5)]" />
-                  System_Status: <span className="text-emerald-300/70">Nominal</span>
+                  Backend: <span className="text-emerald-300/70">Connected</span>
                 </span>
                 <span className="h-px w-5 bg-white/10" />
                 <span>Decision: <span className="text-red-400/70">{releaseStatus}</span></span>
@@ -212,14 +212,14 @@ export default function Hero() {
                 className="group flex items-center gap-2 border border-red-500/70 bg-red-600/90 px-6 py-3 text-white text-xs uppercase tracking-[0.15em] font-medium hover:bg-red-500 hover:shadow-[0_0_24px_rgba(239,68,68,0.4)] transition-all duration-300"
               >
                 <span className="text-red-100 transition-transform duration-300 group-hover:translate-x-1">&gt;_</span>
-                Start Release
+                Run Security Check
               </button>
               <button onClick={() => void loadLiveData()} className="group flex items-center gap-2 border border-white/20 px-6 py-3 text-white text-xs uppercase tracking-[0.15em] font-light hover:border-red-500/70 hover:bg-red-950/20 transition-all duration-300">
                 <span className="text-red-400/70 transition-transform duration-300 group-hover:translate-x-1">&gt;_</span>
                 Refresh Live
               </button>
             </div>
-            {showReleaseForm && <form onSubmit={submitRelease} className="border border-red-500/30 bg-black/60 p-3"><label className="block text-[8px] uppercase tracking-[0.16em] text-white/40">Candidate commit SHA<input required minLength={4} maxLength={128} pattern="[A-Za-z0-9._/-]+" value={commitSha} onChange={(event) => setCommitSha(event.target.value)} placeholder="abcd1234" className="mt-2 w-full border border-white/15 bg-black px-3 py-2 text-xs text-white outline-none focus:border-red-400" /></label><button disabled={submitting} className="mt-3 border border-red-500/70 px-4 py-2 text-[9px] uppercase tracking-[0.15em] text-red-100 disabled:opacity-40">{submitting ? 'Starting…' : 'Run security gate'}</button></form>}
+            {showReleaseForm && <form onSubmit={submitRelease} className="border border-red-500/30 bg-black/60 p-3"><p className="mb-3 text-[9px] leading-4 text-white/55">This does not deploy code. Canary attacks the configured candidate agent at <span className="text-white/75">{project?.endpoint || 'the verified target'}</span>, replays the accepted baseline, and saves a PASS, WARN, or BLOCK result.</p><label className="block text-[8px] uppercase tracking-[0.16em] text-white/40">Candidate commit SHA<input required minLength={4} maxLength={128} pattern="[A-Za-z0-9._/-]+" value={commitSha} onChange={(event) => setCommitSha(event.target.value)} placeholder="abcd1234" className="mt-2 w-full border border-white/15 bg-black px-3 py-2 text-xs text-white outline-none focus:border-red-400" /></label><button disabled={submitting} className="mt-3 border border-red-500/70 px-4 py-2 text-[9px] uppercase tracking-[0.15em] text-red-100 disabled:opacity-40">{submitting ? 'Starting security check…' : 'Run security check'}</button></form>}
             {report && <details className="border-t border-white/[0.08] pt-3 text-[9px] text-white/45"><summary className="cursor-pointer uppercase tracking-[0.16em] text-red-300/70">Persisted evidence and telemetry</summary><div className="mt-3 max-h-32 space-y-2 overflow-auto pr-2">{report.regressions.map((item) => <div key={item.regression_id} className="border border-white/[0.08] p-2"><p className="uppercase text-white/65">{item.classification} · {item.severity || 'unrated'}</p><p className="mt-1 line-clamp-2">{String(item.candidate_evidence?.response || item.baseline_evidence?.response || item.reason || 'No evidence')}</p></div>)}</div></details>}
           </div>
         </div>
