@@ -93,7 +93,7 @@ export default function Navbar({ onLogoClick, onRedTeam, onFindings }: NavbarPro
             <span className="text-red-400/70">0x7F-A91C</span>
           </div>
 
-          {[...NAV_LINKS, { label: 'Request Access', key: 'access' }, { label: 'About', key: 'about' }].map(({ label, key }, i) => (
+          {[...NAV_LINKS, { label: 'About', key: 'about' }].map(({ label, key }, i) => (
             <button
               key={key}
               onClick={() => { setMenuOpen(false); handlers[key]?.() }}
