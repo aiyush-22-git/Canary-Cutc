@@ -1,495 +1,72 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Navbar from '../components/Navbar'
-import { getIncidents, getRun } from '../lib/api'
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface Incident {
-  id: string
-  run_id: string
-  timestamp: string
-  agent: string
-  type: string
-  riskScore: number
-  status: string
-  details: string
-}
-
-interface Attack {
-  id: number
-  attempt_number: number
-  strategy_type: string
-  success: boolean
-  severity: string
-  score: number
-  score_threshold: number
-  prompt: string
-  response: string
-  timestamp: string | null
-  finding_id: string | null
-  target_id: string | null
-}
-
-interface RunDetail {
-  run_id: string
-  target_id: string
-  status: string
-  start_time: string | null
-  end_time: string | null
-  total_attacks: number
-  successful_attacks: number
-  success_rate: number
-  attacks: Attack[]
-}
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const ATTACK_ICONS: Record<string, string> = {
-  'Prompt Injection':   'PI',
-  'Tool Misuse':        'TM',
-  'Data Exfiltration':  'DE',
-  'Privilege Escalation': 'PE',
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function riskBarColor(score: number): string {
-  if (score > 70) return 'bg-red-500'
-  if (score >= 40) return 'bg-orange-400'
-  return 'bg-white/30'
-}
-
-function riskTextColor(score: number): string {
-  if (score > 70) return 'text-red-400'
-  if (score >= 40) return 'text-orange-400'
-  return 'text-white/40'
-}
-
-function statusBadgeClass(status: string): string {
-  if (status === 'Critical') return 'bg-red-950/30 text-red-400 border border-red-600/20'
-  if (status === 'Warning')  return 'text-orange-400'
-  return 'text-white/30'
-}
-
-function humanStrategy(s: string): string {
-  const MAP: Record<string, string> = {
-    prompt_injection:        'Prompt Injection',
-    tool_misuse:             'Tool Misuse',
-    indirect_injection:      'Data Exfiltration',
-    retrieval_poisoning:     'Retrieval Poisoning',
-    jailbreak:               'Privilege Escalation',
-    sensitive_data_exposure: 'Data Exfiltration',
-    memory_poisoning:        'Memory Poisoning',
-    workflow_manipulation:   'Agent DoS',
-    instruction_hierarchy:   'Goal Hijacking',
-  }
-  return MAP[s] ?? s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-}
-
-// ─── Run Detail Panel ─────────────────────────────────────────────────────────
-
-function RunDetailPanel({ detail }: { detail: RunDetail }) {
-  return (
-    <div>
-      {/* Run metadata grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-8 gap-y-4 mb-6">
-        {([
-          ['Run ID',       detail.run_id],
-          ['Target',       detail.target_id],
-          ['Status',       detail.status],
-          ['Start Time',   detail.start_time  ?? '—'],
-          ['End Time',     detail.end_time    ?? '—'],
-          ['Success Rate', `${(detail.success_rate * 100).toFixed(1)}%`],
-        ] as [string, string][]).map(([label, value]) => (
-          <div key={label} className="flex flex-col gap-0.5">
-            <span className="text-white/20 text-[9px] uppercase tracking-wider">{label}</span>
-            <span className="text-white/70 text-xs font-mono">{value}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Summary row */}
-      <div className="flex gap-6 border border-white/10 bg-white/[0.02] px-4 py-3 mb-6">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-white/20 text-[9px] uppercase tracking-wider">Total Attacks</span>
-          <span className="text-white/70 text-xs font-mono">{detail.total_attacks}</span>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className="text-white/20 text-[9px] uppercase tracking-wider">Successful</span>
-          <span className="text-red-400 text-xs font-mono">{detail.successful_attacks}</span>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className="text-white/20 text-[9px] uppercase tracking-wider">Blocked</span>
-          <span className="text-white/60 text-xs font-mono">{detail.total_attacks - detail.successful_attacks}</span>
-        </div>
-      </div>
-
-      {/* Attacks table */}
-      {detail.attacks.length > 0 && (
-        <div className="mb-6">
-          <div className="text-white/20 text-[9px] uppercase tracking-[0.2em] mb-3">Attacks</div>
-          <div className="border border-white/[0.06]">
-            {/* Table header */}
-            <div className="grid grid-cols-[32px_1fr_140px_60px_1fr_80px] gap-3 px-3 py-2 border-b border-white/[0.06] bg-white/[0.01]">
-              {['#', 'Strategy', 'Score / Threshold', 'Result', 'Prompt', 'Finding'].map(h => (
-                <span key={h} className="text-white/20 text-[9px] uppercase tracking-[0.15em]">{h}</span>
-              ))}
-            </div>
-            {detail.attacks.map(attack => (
-              <div
-                key={attack.id}
-                className="grid grid-cols-[32px_1fr_140px_60px_1fr_80px] gap-3 items-start px-3 py-2.5 border-b border-white/[0.04] last:border-b-0 hover:bg-white/[0.01]"
-              >
-                {/* Attempt # */}
-                <span className="text-white/30 text-[9px] font-mono mt-0.5">{attack.attempt_number}</span>
-
-                {/* Strategy */}
-                <span className="text-white/60 text-[10px] leading-relaxed">{humanStrategy(attack.strategy_type)}</span>
-
-                {/* Score / threshold bar */}
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-1.5">
-                    <div className="flex-1 h-[2px] bg-white/10 relative">
-                      {/* Threshold marker */}
-                      <div
-                        className="absolute top-0 h-full w-[1px] bg-white/30"
-                        style={{ left: `${Math.min(100, attack.score_threshold * 100)}%` }}
-                      />
-                      {/* Score fill */}
-                      <div
-                        className={`h-full ${attack.score > attack.score_threshold ? 'bg-red-500' : 'bg-white/30'}`}
-                        style={{ width: `${Math.min(100, attack.score * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-mono text-white/40">
-                    {attack.score.toFixed(2)} / {attack.score_threshold.toFixed(2)}
-                  </span>
-                </div>
-
-                {/* Success badge */}
-                <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 ${
-                  attack.success
-                    ? 'bg-red-950/30 text-red-400 border border-red-600/20'
-                    : 'text-white/30'
-                }`}>
-                  {attack.success ? 'HIT' : 'MISS'}
-                </span>
-
-                {/* Prompt excerpt */}
-                <span className="text-white/40 text-[9px] font-mono leading-relaxed line-clamp-2">
-                  {attack.prompt.length > 120 ? attack.prompt.slice(0, 120) + '…' : attack.prompt}
-                </span>
-
-                {/* Finding ID */}
-                <span className="text-white/20 text-[9px] font-mono truncate">
-                  {attack.finding_id ? attack.finding_id.slice(0, 8) : '—'}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Main component ───────────────────────────────────────────────────────────
+import { getProjectReleases, getProjects, getReleaseReport } from '../lib/api'
+import type { ProjectRecord, ReleaseRecord, ReleaseReport } from '../lib/api'
 
 interface RedTeamPageProps {
   onBack: () => void
   onFindings?: () => void
 }
 
-export default function RedTeamPage({ onBack, onFindings }: RedTeamPageProps) {
-  const [incidents,        setIncidents]        = useState<Incident[]>([])
-  const [loading,          setLoading]          = useState(true)
-  const [error,            setError]            = useState<string | null>(null)
-  const [expandedId,       setExpandedId]       = useState<string | null>(null)
-  const [activeRunId,      setActiveRunId]      = useState<string | null>(null)
-  const [runDetail,        setRunDetail]        = useState<RunDetail | null>(null)
-  const [runDetailLoading, setRunDetailLoading] = useState(false)
-  const [runDetailError,   setRunDetailError]   = useState<string | null>(null)
+const colors: Record<string, string> = {
+  pass: 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200',
+  warn: 'border-amber-400/40 bg-amber-400/10 text-amber-200',
+  block: 'border-red-400/40 bg-red-500/10 text-red-200',
+  regression: 'border-red-400/40 bg-red-500/10 text-red-200',
+  known: 'border-amber-400/40 bg-amber-400/10 text-amber-200',
+  resolved: 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200',
+  clean: 'border-white/15 bg-white/[0.03] text-white/55',
+}
 
-  // ── Fetch incidents ─────────────────────────────────────────────────────────
-  const fetchIncidents = useCallback(async () => {
+const short = (value?: string | null) => value ? `${value.slice(0, 8)}…` : '—'
+const when = (value?: string | null) => value ? new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—'
+
+export default function RedTeamPage({ onBack, onFindings }: RedTeamPageProps) {
+  const [projects, setProjects] = useState<ProjectRecord[]>([])
+  const [projectId, setProjectId] = useState('')
+  const [releases, setReleases] = useState<ReleaseRecord[]>([])
+  const [report, setReport] = useState<ReleaseReport | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async (requestedProject?: string, requestedRelease?: string) => {
+    setLoading(true)
+    setError(null)
     try {
-      const data = await getIncidents() as Incident[]
-      setIncidents(data)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
+      const projectRows = await getProjects()
+      let chosenProjectId = requestedProject || projectId
+      let releaseRows: ReleaseRecord[] | undefined
+      if (!chosenProjectId && projectRows.length) {
+        const groups = await Promise.all(projectRows.map((item) => getProjectReleases(item.project_id)))
+        const newestIndex = groups.reduce((best, rows, index) => (rows[0]?.created_at || '') > (groups[best][0]?.created_at || '') ? index : best, 0)
+        chosenProjectId = projectRows[newestIndex]?.project_id || projectRows[0].project_id
+        releaseRows = groups[newestIndex]
+      }
+      const selectedReleases = releaseRows || (chosenProjectId ? await getProjectReleases(chosenProjectId) : [])
+      const chosenReleaseId = requestedRelease || selectedReleases[0]?.release_id
+      setProjects(projectRows)
+      setProjectId(chosenProjectId)
+      setReleases(selectedReleases)
+      setReport(chosenReleaseId ? await getReleaseReport(chosenReleaseId) : null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to load persisted red-team evidence')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [projectId])
 
-  useEffect(() => {
-    fetchIncidents()
-    const interval = setInterval(fetchIncidents, 30_000)
-    return () => clearInterval(interval)
-  }, [fetchIncidents])
+  useEffect(() => { void load() }, [load])
+  const project = useMemo(() => projects.find((item) => item.project_id === projectId), [projects, projectId])
+  const release = report?.release
 
-  // ── Fetch run detail ────────────────────────────────────────────────────────
-  const fetchRunDetail = useCallback(async (runId: string) => {
-    setRunDetailLoading(true)
-    setRunDetailError(null)
-    setRunDetail(null)
-    setActiveRunId(runId)
-    try {
-      const data = await getRun(runId) as RunDetail
-      setRunDetail(data)
-    } catch (e) {
-      setRunDetailError((e as Error).message)
-    } finally {
-      setRunDetailLoading(false)
-    }
-  }, [])
-
-  // ── Toggle row expansion ────────────────────────────────────────────────────
-  const toggleRow = (id: string) => {
-    setExpandedId(prev => {
-      if (prev === id) {
-        // Collapsing — clear run detail if it belongs to this row
-        const incident = incidents.find(i => i.id === id)
-        if (incident && activeRunId === incident.run_id) {
-          setActiveRunId(null)
-          setRunDetail(null)
-          setRunDetailError(null)
-        }
-        return null
-      }
-      return id
-    })
-  }
-
-  // ── Derived stats ───────────────────────────────────────────────────────────
-  const totalIncidents = incidents.length
-  const criticalCount  = incidents.filter(i => i.status === 'Critical').length
-  const blockedCount   = incidents.filter(i => i.status === 'Blocked').length
-  const avgRisk = incidents.length > 0
-    ? Math.round(incidents.reduce((sum, i) => sum + i.riskScore, 0) / incidents.length)
-    : 0
-
-  // ─── RENDER ─────────────────────────────────────────────────────────────────
-  return (
-    <div className="min-h-screen bg-black text-white font-mono">
-      <Navbar onLogoClick={onBack} onFindings={onFindings} />
-      {/* ── SECTION 01: LIVE INCIDENT FEED ── */}
-      <section className="px-6 sm:px-10 md:px-16 lg:px-20 py-16 border-b border-white/10 pt-36">
-
-        {/* Section header + live badge */}
-        <div className="flex items-center justify-between mb-10">
-          <p className="text-white/30 text-[10px] tracking-[0.3em] uppercase">
-            // SECTION 01 — LIVE INCIDENT FEED
-          </p>
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse-red" />
-            <span className="text-white/40 text-[9px] uppercase tracking-[0.25em]">LIVE</span>
-          </div>
-        </div>
-
-        {/* Loading state */}
-        {loading && (
-          <div className="py-24 flex items-center justify-center gap-2">
-            <span className="text-white/40 text-xs uppercase tracking-[0.3em]">Fetching incident feed</span>
-            <span className="text-red-500 animate-blink text-sm leading-none">█</span>
-          </div>
-        )}
-
-        {/* Error banner (still renders table below) */}
-        {error && (
-          <div className="mb-6 border border-red-600/30 bg-red-950/20 px-4 py-3 flex items-center gap-2">
-            <span className="text-red-600/60 text-[9px] uppercase tracking-wider">Error</span>
-            <span className="text-red-400 text-[10px] font-mono">{error}</span>
-          </div>
-        )}
-
-        {/* Table */}
-        {!loading && (
-          <>
-            {/* Column headers */}
-            <div className="hidden sm:grid sm:grid-cols-[120px_1fr_1fr_160px_100px] gap-4 px-4 py-2 border-b border-white/[0.08]">
-              {['Timestamp', 'Agent', 'Attack Type', 'Risk Score', 'Status'].map(h => (
-                <span key={h} className="text-white/20 text-[9px] uppercase tracking-[0.2em]">{h}</span>
-              ))}
-            </div>
-
-            {/* Empty state */}
-            {incidents.length === 0 && !error && (
-              <div className="py-24 text-center border-b border-white/[0.06]">
-                <span className="text-white/30 text-xs uppercase tracking-[0.25em]">
-                  No incidents recorded. Run an audit to begin.
-                </span>
-              </div>
-            )}
-
-            {/* Incident rows */}
-            {incidents.map(incident => (
-              <React.Fragment key={incident.id}>
-                {/* Row */}
-                <div
-                  onClick={() => toggleRow(incident.id)}
-                  className={`grid grid-cols-[1fr_auto] sm:grid-cols-[120px_1fr_1fr_160px_100px] gap-4 items-center px-4 py-3 border-b border-white/[0.06] cursor-pointer hover:bg-white/[0.02] transition-colors duration-150 ${
-                    expandedId === incident.id ? 'bg-white/[0.02]' : ''
-                  }`}
-                >
-                  {/* Timestamp */}
-                  <span className="text-white/50 text-xs font-mono">{incident.timestamp}</span>
-
-                  {/* Agent (hidden on mobile in compact layout) */}
-                  <span className="hidden sm:block text-white/70 text-xs truncate">{incident.agent}</span>
-
-                  {/* Attack type with icon prefix */}
-                  <div className="hidden sm:flex items-center gap-2 min-w-0">
-                    <span className="text-red-500/70 text-[9px] font-mono bg-red-950/20 border border-red-600/10 px-1 py-0.5 shrink-0">
-                      {ATTACK_ICONS[incident.type] ?? '--'}
-                    </span>
-                    <span className="text-white/70 text-xs truncate">{incident.type}</span>
-                  </div>
-
-                  {/* Risk score bar + number */}
-                  <div className="hidden sm:flex items-center gap-2">
-                    <div className="flex-1 h-[2px] bg-white/10 max-w-[80px]">
-                      <div
-                        className={`h-full ${riskBarColor(incident.riskScore)} transition-all duration-500`}
-                        style={{ width: `${incident.riskScore}%` }}
-                      />
-                    </div>
-                    <span className={`text-[10px] font-mono shrink-0 ${riskTextColor(incident.riskScore)}`}>
-                      {incident.riskScore}
-                    </span>
-                  </div>
-
-                  {/* Status badge */}
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[9px] uppercase tracking-wider px-2 py-0.5 ${statusBadgeClass(incident.status)}`}>
-                      {incident.status}
-                    </span>
-                    {/* Mobile: expand indicator */}
-                    <span className="sm:hidden text-white/20 text-[9px]">
-                      {expandedId === incident.id ? '▲' : '▼'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Inline expansion */}
-                {expandedId === incident.id && (
-                  <div className="bg-white/[0.03] border border-white/10 mx-4 my-1 px-5 py-4">
-
-                    {/* Mobile: show cols hidden above */}
-                    <div className="flex flex-wrap gap-4 sm:hidden mb-4 pb-4 border-b border-white/[0.06]">
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-white/20 text-[9px] uppercase tracking-wider">Agent</span>
-                        <span className="text-white/70 text-xs">{incident.agent}</span>
-                      </div>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-white/20 text-[9px] uppercase tracking-wider">Attack Type</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-red-500/70 text-[9px] font-mono bg-red-950/20 border border-red-600/10 px-1 py-0.5">
-                            {ATTACK_ICONS[incident.type] ?? '--'}
-                          </span>
-                          <span className="text-white/70 text-xs">{incident.type}</span>
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-white/20 text-[9px] uppercase tracking-wider">Risk Score</span>
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-[2px] bg-white/10">
-                            <div
-                              className={`h-full ${riskBarColor(incident.riskScore)}`}
-                              style={{ width: `${incident.riskScore}%` }}
-                            />
-                          </div>
-                          <span className={`text-[10px] font-mono ${riskTextColor(incident.riskScore)}`}>
-                            {incident.riskScore}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Details + View Run button */}
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-white/20 text-[9px] uppercase tracking-wider mb-2">Incident Detail</div>
-                        <div className="text-white/70 text-xs leading-relaxed">{incident.details}</div>
-                        <div className="mt-2 text-white/25 text-[9px] font-mono">
-                          {incident.id} · run: {incident.run_id}
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); fetchRunDetail(incident.run_id) }}
-                        className="shrink-0 px-4 py-2 border border-white/20 text-white/60 text-[10px] uppercase tracking-[0.15em] hover:border-white/40 hover:text-white transition-all duration-200"
-                      >
-                        View Run →
-                      </button>
-                    </div>
-
-                    {/* Run detail panel */}
-                    {activeRunId === incident.run_id && (
-                      <div className="mt-5 border-t border-white/[0.06] pt-5">
-                        {runDetailLoading && (
-                          <div className="py-6 flex items-center gap-2">
-                            <span className="text-white/40 text-[10px] uppercase tracking-wider">
-                              Loading run {incident.run_id}
-                            </span>
-                            <span className="text-red-500 animate-blink text-sm leading-none">█</span>
-                          </div>
-                        )}
-                        {runDetailError && !runDetailLoading && (
-                          <div className="border border-red-600/30 bg-red-950/20 px-4 py-3">
-                            <span className="text-red-400 text-[10px] uppercase tracking-wider">
-                              Error: {runDetailError}
-                            </span>
-                          </div>
-                        )}
-                        {runDetail && runDetail.run_id === incident.run_id && !runDetailLoading && (
-                          <RunDetailPanel detail={runDetail} />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </React.Fragment>
-            ))}
-          </>
-        )}
-      </section>
-
-      {/* ── SECTION 02: CAMPAIGN STATS ── */}
-      <section className="px-6 sm:px-10 md:px-16 lg:px-20 py-14">
-        <p className="text-white/30 text-[10px] tracking-[0.3em] uppercase mb-8">
-          // SECTION 02 — CAMPAIGN STATS
-        </p>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {/* Total Incidents */}
-          <div className="border border-white/10 bg-white/[0.02] p-5">
-            <div className="text-white text-2xl font-bold mb-1">{totalIncidents}</div>
-            <div className="text-white/30 text-[9px] uppercase tracking-[0.2em]">Total Incidents</div>
-          </div>
-
-          {/* Critical */}
-          <div className="border border-red-600/30 bg-red-950/10 p-5">
-            <div className="text-red-400 text-2xl font-bold mb-1">{criticalCount}</div>
-            <div className="text-white/30 text-[9px] uppercase tracking-[0.2em]">Critical</div>
-          </div>
-
-          {/* Blocked */}
-          <div className="border border-white/10 bg-white/[0.02] p-5">
-            <div className="text-white text-2xl font-bold mb-1">{blockedCount}</div>
-            <div className="text-white/30 text-[9px] uppercase tracking-[0.2em]">Blocked</div>
-          </div>
-
-          {/* Avg Risk Score */}
-          <div className={`border p-5 ${avgRisk > 70 ? 'border-red-600/20 bg-red-950/10' : 'border-white/10 bg-white/[0.02]'}`}>
-            <div className={`text-2xl font-bold mb-1 ${avgRisk > 70 ? 'text-red-400' : avgRisk >= 40 ? 'text-orange-400' : 'text-white'}`}>
-              {avgRisk}
-            </div>
-            <div className="text-white/30 text-[9px] uppercase tracking-[0.2em]">Avg Risk Score</div>
-          </div>
-        </div>
-      </section>
-    </div>
-  )
+  return <main className="min-h-screen bg-black px-6 pb-20 pt-32 font-mono text-white sm:px-10 md:px-16 lg:px-20">
+    <Navbar onLogoClick={onBack} onFindings={onFindings} />
+    <header className="border-b border-white/10 pb-8"><p className="text-[10px] uppercase tracking-[0.3em] text-red-300/70">Agent Canary / Red Team</p><h1 className="mt-4 text-3xl font-semibold tracking-tight sm:text-5xl">Attack evidence.<br /><span className="text-white/40">Compared, not guessed.</span></h1><p className="mt-4 max-w-2xl text-sm leading-6 text-white/50">Every item below is persisted by the AWS release gate: the attack, baseline behaviour, candidate behaviour, evaluator conclusion, and classification.</p></header>
+    {error && <p className="mt-6 border border-red-400/30 bg-red-500/10 p-4 text-xs text-red-200">{error}</p>}
+    {loading && <p className="py-14 text-xs uppercase tracking-[0.2em] text-white/35">Loading persisted red-team evidence…</p>}
+    {!loading && <><section className="mt-7 grid gap-3 border border-white/10 bg-white/[0.02] p-4 sm:grid-cols-2"><label className="text-[9px] uppercase tracking-[0.16em] text-white/35">Project<select value={projectId} onChange={(event) => void load(event.target.value)} className="mt-2 w-full border border-white/15 bg-black p-3 text-xs normal-case tracking-normal text-white"><option value="">Select project</option>{projects.map((item) => <option key={item.project_id} value={item.project_id}>{item.name}</option>)}</select></label><label className="text-[9px] uppercase tracking-[0.16em] text-white/35">Security check<select value={release?.release_id || ''} onChange={(event) => void load(projectId, event.target.value)} className="mt-2 w-full border border-white/15 bg-black p-3 text-xs normal-case tracking-normal text-white"><option value="">Select release</option>{releases.map((item) => <option key={item.release_id} value={item.release_id}>{short(item.commit_sha)} · {item.decision || item.status} · {when(item.created_at)}</option>)}</select></label></section>
+    {project && release && <><section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[['Project', project.name], ['Decision', (release.decision || release.status).toUpperCase()], ['Baseline → candidate', `${release.baseline_score ?? '—'} → ${release.candidate_score ?? '—'}`], ['Delta', release.score_delta ?? '—'], ['Coverage', release.coverage?.percentage == null ? '—' : `${release.coverage.percentage}%`]].map(([label, value]) => <div key={label} className="border border-white/10 bg-white/[0.02] p-4"><p className="text-[9px] uppercase tracking-[0.17em] text-white/35">{label}</p><p className="mt-2 text-sm text-white/80">{value}</p></div>)}</section>
+    <section className="mt-8"><div className="flex items-end justify-between border-b border-white/10 pb-3"><h2 className="text-xs uppercase tracking-[0.2em] text-white/70">Differential attack cases</h2><button onClick={() => void load(projectId, release.release_id)} className="text-[10px] uppercase tracking-[0.16em] text-red-300/75 hover:text-red-200">Refresh</button></div><div className="mt-4 space-y-3">{report.regressions.length === 0 ? <p className="text-sm text-white/40">No completed attack cases are persisted for this check.</p> : report.regressions.map((item) => <details key={item.regression_id} className="border border-white/10 bg-white/[0.02] p-4"><summary className="flex cursor-pointer flex-wrap items-center gap-3 text-xs"><span className={`border px-2 py-1 text-[9px] uppercase tracking-[0.14em] ${colors[item.classification] || colors.clean}`}>{item.classification}</span><span className="uppercase tracking-[0.13em] text-white/55">{item.severity || 'unrated'}</span><span className="text-white/35">case {short(item.attack_case_id)}</span></summary><div className="mt-4 grid gap-4 text-xs leading-6 text-white/60"><div><p className="text-[9px] uppercase tracking-[0.17em] text-white/30">Attack prompt</p><p className="mt-1 whitespace-pre-wrap">{String(item.candidate_evidence?.prompt || item.baseline_evidence?.prompt || '—')}</p></div><div className="grid gap-4 md:grid-cols-2"><div><p className="text-[9px] uppercase tracking-[0.17em] text-white/30">Accepted baseline</p><p className="mt-1 whitespace-pre-wrap">{String(item.baseline_evidence?.response || '—')}</p></div><div><p className="text-[9px] uppercase tracking-[0.17em] text-white/30">Candidate</p><p className="mt-1 whitespace-pre-wrap">{String(item.candidate_evidence?.response || '—')}</p></div></div><p><span className="text-[9px] uppercase tracking-[0.17em] text-white/30">Evaluator</span><br />{item.reason || '—'}</p></div></details>)}</div></section></>}
+    </>}
+  </main>
 }
