@@ -489,6 +489,39 @@ def run_release_orchestrator_thread(
         cancellation_release_id=release_id,
     )
 
+    # The candidate may discover new attack payloads that were not present in
+    # the accepted release.  Differential testing must replay those exact
+    # payloads against the baseline as well; otherwise every newly discovered
+    # case is left unpaired and can only become INDETERMINATE.  Read the
+    # candidate's persisted attack records after its run completes and build a
+    # deterministic, de-duplicated replay set from the actual cases executed.
+    candidate_replay_cases: list[dict[str, str]] = []
+    candidate_store = SQLiteStore(settings.database_location)
+    try:
+        with candidate_store.SessionLocal() as candidate_session:
+            candidate_attacks = candidate_session.scalars(
+                select(AttackRecord)
+                .where(AttackRecord.run_id == run_id)
+                .order_by(AttackRecord.id.asc())
+            ).all()
+            seen_candidate_cases: set[tuple[str, str, str]] = set()
+            for attack in candidate_attacks:
+                case = (
+                    str(attack.strategy_type or "prompt_injection"),
+                    str(attack.technique_id or attack.strategy_type or ""),
+                    str(attack.prompt or ""),
+                )
+                if case in seen_candidate_cases or not case[2]:
+                    continue
+                seen_candidate_cases.add(case)
+                candidate_replay_cases.append(
+                    {"strategy": case[0], "technique_id": case[1], "prompt": case[2]}
+                )
+    finally:
+        candidate_store.close()
+    if candidate_replay_cases:
+        replay_cases = candidate_replay_cases
+
     # A release cancellation may arrive while an in-flight HTTP/LLM call is
     # finishing.  Do not start the baseline replay or differential finalizer
     # after the operator has requested cancellation.
