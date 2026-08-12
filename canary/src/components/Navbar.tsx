@@ -10,7 +10,8 @@ const Logo = () => (
 )
 
 const NAV_LINKS = [
-  { label: 'Red Team',  key: 'redteam'  },
+  { label: 'Projects',  key: 'projects'  },
+  { label: 'Releases',  key: 'releases'  },
   { label: 'Findings',  key: 'findings' },
 ]
 
@@ -21,9 +22,9 @@ interface NavbarProps {
   onFindings?: () => void
 }
 
-export default function Navbar({ onRunAudit, onLogoClick, onRedTeam, onFindings }: NavbarProps) {
+export default function Navbar({ onRunAudit, onLogoClick, onFindings }: NavbarProps) {
   const handlers: Record<string, (() => void) | undefined> = {
-    redteam: onRedTeam, findings: onFindings,
+    projects: onLogoClick, releases: onLogoClick, findings: onFindings,
   }
   const [scrolled, setScrolled] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -94,7 +95,7 @@ export default function Navbar({ onRunAudit, onLogoClick, onRedTeam, onFindings 
             <span className="text-red-400/70">0x7F-A91C</span>
           </div>
 
-          {[...NAV_LINKS, { label: 'Run Audit', key: 'audit' }, { label: 'Request Access', key: 'access' }, { label: 'About', key: 'about' }].map(({ label, key }, i) => (
+          {[...NAV_LINKS, { label: 'New Release', key: 'audit' }].map(({ label, key }, i) => (
             <button
               key={key}
               onClick={() => { setMenuOpen(false); if (key === 'audit') onRunAudit?.(); else handlers[key]?.() }}

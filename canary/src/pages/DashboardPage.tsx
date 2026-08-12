@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import Navbar from '../components/Navbar'
-import { getLlmTelemetry, getProjects, getProjectReleases, getReleaseReport } from '../lib/api'
+import { createProjectRelease, getLlmTelemetry, getProjects, getProjectReleases, getReleaseReport } from '../lib/api'
 import type { LlmTelemetryRecord, ProjectRecord, ReleaseRecord, ReleaseReport } from '../lib/api'
 
 interface DashboardPageProps {
@@ -39,6 +40,9 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
   const [releases, setReleases] = useState<ReleaseRecord[]>([])
   const [selectedRelease, setSelectedRelease] = useState<ReleaseReport | null>(null)
   const [telemetry, setTelemetry] = useState<LlmTelemetryRecord[]>([])
+  const [showReleaseForm, setShowReleaseForm] = useState(false)
+  const [commitSha, setCommitSha] = useState('')
+  const [submittingRelease, setSubmittingRelease] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -87,6 +91,23 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
     catch (err) { setError(err instanceof Error ? err.message : 'Unable to load release evidence') }
   }
 
+  const submitRelease = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!projectId || !commitSha.trim()) return
+    setSubmittingRelease(true)
+    setError(null)
+    try {
+      await createProjectRelease(projectId, { commit_sha: commitSha.trim(), environment: project?.environment || 'preview' })
+      setCommitSha('')
+      setShowReleaseForm(false)
+      await load(projectId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to start the release gate')
+    } finally {
+      setSubmittingRelease(false)
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#03090b] font-mono text-white">
       <Navbar onRunAudit={onRunAudit} onFindings={onFindings} onRedTeam={onRedTeam} onLogoClick={() => { window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
@@ -99,7 +120,7 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
           </div>
           <div className="flex gap-3">
             <button onClick={() => void load(projectId)} className="border border-white/15 px-4 py-3 text-[10px] uppercase tracking-[0.18em] text-white/60 hover:border-white/40">Refresh database</button>
-            <button onClick={onRunAudit} className="bg-red-500 px-4 py-3 text-[10px] uppercase tracking-[0.18em] text-white hover:bg-red-400">New run ↗</button>
+            <button onClick={() => setShowReleaseForm((value) => !value)} className="bg-red-500 px-4 py-3 text-[10px] uppercase tracking-[0.18em] text-white hover:bg-red-400">New release ↗</button>
           </div>
         </header>
 
@@ -109,6 +130,7 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
 
         {!loading && projects.length > 0 && (
           <>
+            {showReleaseForm && <form onSubmit={submitRelease} className="mt-6 border border-red-400/30 bg-red-500/[0.06] p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-end"><label className="flex-1"><span className="text-[9px] uppercase tracking-[0.2em] text-white/45">Candidate commit SHA</span><input required minLength={4} maxLength={128} pattern="[A-Za-z0-9._/-]+" value={commitSha} onChange={(event) => setCommitSha(event.target.value)} placeholder="abcd1234 or pull/42" className="mt-2 w-full border border-white/15 bg-black px-3 py-3 text-xs text-white outline-none focus:border-red-300" /></label><button disabled={submittingRelease} className="border border-red-300/60 px-4 py-3 text-[10px] uppercase tracking-[0.18em] text-red-200 disabled:opacity-40">{submittingRelease ? 'Starting…' : 'Start security gate'}</button></div><p className="mt-3 text-[10px] text-white/35">The AWS backend will attack this candidate, replay the accepted baseline, persist evidence, and update this release history.</p></form>}
             <section className="mt-8 flex flex-col gap-4 border border-white/10 bg-white/[0.02] p-5 sm:flex-row sm:items-center sm:justify-between">
               <div><p className="text-[9px] uppercase tracking-[0.2em] text-white/35">Project from backend</p><p className="mt-2 text-xl text-white">{project?.name}</p><p className="mt-1 text-xs text-white/35">{project?.repository || project?.endpoint} · {project?.environment}</p></div>
               <select value={projectId} onChange={(event) => { setProjectId(event.target.value); void load(event.target.value) }} className="border border-white/15 bg-black px-3 py-3 text-xs text-white/75 outline-none"><option value="" disabled>Select project</option>{projects.map((item) => <option key={item.project_id} value={item.project_id}>{item.name}</option>)}</select>
@@ -137,11 +159,11 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
 
               <div className="border border-white/10 bg-white/[0.02] p-5">
                 <h2 className="text-xs uppercase tracking-[0.2em] text-white/70">Latest evidence</h2>
-                {selectedRelease ? <div className="mt-5 space-y-4"><div className="flex items-center justify-between"><span className={`border px-3 py-2 text-xs uppercase ${decisionClass[selectedRelease.release.decision || ''] || 'border-white/15 text-white/50'}`}>{selectedRelease.release.decision || selectedRelease.release.status}</span><span className="text-[10px] text-white/35">{shortId(selectedRelease.release.release_id)}</span></div><div className="grid grid-cols-3 gap-2"><Metric label="Baseline" value={selectedRelease.release.baseline_score ?? '—'} /><Metric label="Candidate" value={selectedRelease.release.candidate_score ?? '—'} /><Metric label="Delta" value={selectedRelease.release.score_delta ?? '—'} /></div><div className="space-y-2 text-xs text-white/55"><p>Cases: {selectedRelease.regressions.length}</p><p>New regressions: {selectedRelease.regressions.filter((item) => item.classification === 'regression').length}</p><p>Resolved: {selectedRelease.regressions.filter((item) => item.classification === 'resolved').length}</p><p>Findings with evidence: {selectedRelease.findings.length}</p></div></div> : <p className="mt-5 text-xs text-white/35">Select a release to load its persisted evidence.</p>}
+                {selectedRelease ? <div className="mt-5 space-y-4"><div className="flex items-center justify-between"><span className={`border px-3 py-2 text-xs uppercase ${decisionClass[selectedRelease.release.decision || ''] || 'border-white/15 text-white/50'}`}>{selectedRelease.release.decision || selectedRelease.release.status}</span><span className="text-[10px] text-white/35">{shortId(selectedRelease.release.release_id)}</span></div><div className="grid grid-cols-3 gap-2"><Metric label="Baseline" value={selectedRelease.release.baseline_score ?? '—'} /><Metric label="Candidate" value={selectedRelease.release.candidate_score ?? '—'} /><Metric label="Delta" value={selectedRelease.release.score_delta ?? '—'} /></div><div className="space-y-2 text-xs text-white/55"><p>Cases: {selectedRelease.regressions.length}</p><p>New regressions: {selectedRelease.regressions.filter((item) => item.classification === 'regression').length}</p><p>Resolved: {selectedRelease.regressions.filter((item) => item.classification === 'resolved').length}</p><p>Findings with evidence: {selectedRelease.findings.length}</p></div><div className="space-y-2">{selectedRelease.regressions.slice(0, 4).map((item) => <details key={item.regression_id} className="border border-white/10 bg-black/20 p-3"><summary className="cursor-pointer text-[10px] uppercase tracking-[0.12em] text-white/70">{item.classification} · {item.severity || 'unrated'} · {item.attack_case_id.slice(0, 8)}…</summary><div className="mt-3 grid gap-3 text-[10px] leading-5 text-white/55"><div><p className="uppercase tracking-[0.16em] text-white/30">Attack</p><p className="mt-1 whitespace-pre-wrap">{String(item.baseline_evidence?.prompt || item.candidate_evidence?.prompt || 'No prompt persisted')}</p></div><div className="grid gap-3 sm:grid-cols-2"><div><p className="uppercase tracking-[0.16em] text-white/30">Baseline response</p><p className="mt-1 whitespace-pre-wrap">{String(item.baseline_evidence?.response || '—')}</p></div><div><p className="uppercase tracking-[0.16em] text-white/30">Candidate response</p><p className="mt-1 whitespace-pre-wrap">{String(item.candidate_evidence?.response || '—')}</p></div></div><p>Evaluator: {item.reason || 'No rationale persisted'}</p></div></details>)}</div></div> : <p className="mt-5 text-xs text-white/35">Select a release to load its persisted evidence.</p>}
               </div>
             </section>
 
-            <section className="mt-6 border border-white/10 bg-white/[0.02] p-5"><div className="flex items-center justify-between"><h2 className="text-xs uppercase tracking-[0.2em] text-white/70">LLM telemetry loaded from database</h2><span className="text-[10px] text-white/35">{telemetryTotals.calls} calls · {telemetryTotals.latency.toFixed(1)}s latency</span></div><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><Metric label="Calls" value={telemetryTotals.calls} /><Metric label="Total tokens" value={telemetryTotals.tokens.toLocaleString()} /><Metric label="Avg latency" value={telemetryTotals.calls ? `${(telemetryTotals.latency / telemetryTotals.calls).toFixed(2)}s` : '—'} /><Metric label="Latest agent" value={telemetry[0]?.agent || '—'} /></div></section>
+            <section className="mt-6 border border-white/10 bg-white/[0.02] p-5"><div className="flex items-center justify-between"><h2 className="text-xs uppercase tracking-[0.2em] text-white/70">LLM telemetry loaded from database</h2><span className="text-[10px] text-white/35">{telemetryTotals.calls} calls · {telemetryTotals.latency.toFixed(1)}s latency</span></div><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><Metric label="Calls" value={telemetryTotals.calls} /><Metric label="Total tokens" value={telemetryTotals.tokens.toLocaleString()} /><Metric label="Avg latency" value={telemetryTotals.calls ? `${(telemetryTotals.latency / telemetryTotals.calls).toFixed(2)}s` : '—'} /><Metric label="Latest agent" value={telemetry[0]?.agent || '—'} /></div><div className="mt-4 space-y-2">{telemetry.slice(0, 8).map((call) => <details key={call.id} className="border border-white/10 px-3 py-2"><summary className="flex cursor-pointer list-none flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/55"><span>{call.agent}</span><span>{call.total_tokens.toLocaleString()} tokens</span><span>{call.latency_seconds.toFixed(2)}s</span><span>{call.status_code || '—'}</span></summary><div className="mt-3 grid gap-3 text-[10px] leading-5 text-white/50 sm:grid-cols-2"><div><p className="uppercase tracking-[0.16em] text-white/30">Prompt</p><p className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap">{call.prompt || '—'}</p></div><div><p className="uppercase tracking-[0.16em] text-white/30">Response</p><p className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap">{call.response || call.error || '—'}</p></div></div></details>)}</div></section>
           </>
         )}
       </div>

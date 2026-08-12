@@ -109,6 +109,11 @@ export interface LlmTelemetryRecord {
 }
 
 export const getProjects = () => apiFetch<ProjectRecord[]>('/api/projects')
+export const createProjectRelease = (projectId: string, body: { commit_sha: string; environment?: string }) =>
+  apiFetch<ReleaseRecord>(`/api/projects/${encodeURIComponent(projectId)}/releases`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 export const getProjectReleases = (projectId: string) =>
   apiFetch<ReleaseRecord[]>(`/api/projects/${encodeURIComponent(projectId)}/releases`)
 export const getReleaseReport = (releaseId: string) =>
