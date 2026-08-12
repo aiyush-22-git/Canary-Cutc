@@ -134,6 +134,7 @@ runs:
 
         health = ENV.fetch("CANARY_HEALTH_URL", "").strip
         health = target["health"].to_s if health.empty? && target["health"]
+        health = health.gsub("${CANARY_TARGET_URL}", ENV.fetch("CANARY_TARGET_URL", ""))
         if !health.empty? && health.start_with?("/")
           uri = URI(endpoint)
           health = "#{uri.scheme}://#{uri.host}#{uri.port ? ":#{uri.port}" : ""}#{health}"
