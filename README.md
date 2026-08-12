@@ -1,61 +1,58 @@
-# Canary-Cutc
+# Canary Backend
 
-Backend-only foundation for the CUTC 2026 Agent Canary project. This repository is being built incrementally on the `backend` branch. The `main` branch is intentionally left untouched.
+Canary is a backend service that tests AI agents for security problems.
+It sends adversarial prompts to an agent over HTTP, records the response, and
+uses separate AI agents to decide whether the response shows a vulnerability.
 
-## Current state
+This repository contains only the backend. The frontend and the target agent
+are separate applications.
 
-The repository currently contains the Canary red-team backend in [`cyber-redteam-foundry/`](cyber-redteam-foundry/). The frontend package was intentionally removed from this backend repository.
-
-Canary is an HTTP-based security testing service for AI agents. It preserves the existing multi-agent pipeline:
-
-```text
-Strategist -> parallel Attackers -> Evaluator -> Reporter
-```
-
-The backend currently includes:
-
-- FastAPI API for projects, targets, releases, campaigns, findings, and reports
-- LangGraph orchestration with parallel attack branches
-- HTTP target adapter for testing externally hosted agents
-- Backboard LLM gateway integration for Strategist, Attacker, Evaluator, and Reporter
-- deterministic detector signals combined with LLM evaluation
-- ASI/ATLAS taxonomy and structured evidence
-- differential release evaluation and baseline regression classification
-- target URL validation and project-scoped CI token primitives
-- SQLite local persistence, with PostgreSQL/Redis/RQ configuration for hosted execution
-- release-gate and GitHub Action support in the source tree
-
-The active LLM configuration is server-side Backboard using OpenRouter and
-`openai/gpt-5.6-luna`. No provider key belongs in frontend code or committed
-files. The active runtime has no Bedrock or in-process target-agent path; all
-agent model calls use Backboard.
-
-Every LLM call persists full prompt and raw response telemetry, provider/model,
-HTTP status, retries, latency, prompt/completion/total token counts, hashes,
-errors, and timestamp. Provider usage metadata is used when available;
-otherwise a transparent text-length estimate is stored. Authenticated access:
+## How it works
 
 ```text
-GET /api/telemetry/llm-calls?limit=100
+HTTP request
+    ↓
+FastAPI API
+    ↓
+Strategist chooses the attack plan
+    ↓
+Parallel attackers generate adversarial prompts
+    ↓
+HTTP target agent receives the prompts
+    ↓
+Evaluator checks the responses and evidence
+    ↓
+Reporter writes a Markdown and JSON report
 ```
 
-## Repository layout
+Canary never treats an attacker response as proof of a vulnerability. The
+Evaluator makes the final decision using the target response, detector signals,
+and an LLM judge.
 
-```text
-.
-└── cyber-redteam-foundry/
-    ├── src/cyberredteam/       # FastAPI service, agents, graph, storage, security
-    ├── src/canary/             # release execution primitives
-    ├── configs/                 # models, policies, attack and taxonomy config
-    ├── prompts/                 # agent system prompts
-    ├── migrations/              # release-domain database migration
-    ├── tests/                   # backend test suite
-    └── Dockerfile
+## Main components
+
+- **FastAPI** — HTTP API, authentication, campaigns, releases, findings, and reports.
+- **LangGraph** — coordinates the Strategist, parallel Attackers, Evaluator, and Reporter.
+- **Backboard** — provides the LLM calls for all four Canary agents.
+- **HTTP target adapter** — tests independently hosted agents without importing their code.
+- **SQLite/SQLAlchemy** — stores campaigns, attacks, traces, verdicts, findings, and telemetry.
+- **Differential engine** — compares a candidate release with an accepted baseline.
+
+## Backboard configuration
+
+The default model is Luna 5.6 through OpenRouter:
+
+```dotenv
+BACKBOARD_API_KEY=your_key
+BACKBOARD_BASE_URL=https://app.backboard.io/api
+BACKBOARD_LLM_PROVIDER=openrouter
+BACKBOARD_MODEL_NAME=openai/gpt-5.6-luna
 ```
+
+The API key must remain server-side. Do not put it in frontend code, commit it
+to Git, or include it in logs.
 
 ## Local setup
-
-From the repository root:
 
 ```bash
 cd cyber-redteam-foundry
@@ -63,53 +60,79 @@ uv sync --extra dev
 cp .env.example .env
 ```
 
-Set `BACKBOARD_API_KEY` in the server environment. The key is created in Backboard Dashboard → Settings → API Keys. Keep it server-side. The default provider/model are:
-
-```dotenv
-BACKBOARD_LLM_PROVIDER=openrouter
-BACKBOARD_MODEL_NAME=openai/gpt-5.6-luna
-```
-
-For local-only development, configure `DATABASE_URL` empty to use SQLite and keep `RELEASE_EXECUTION_MODE=thread`. Do not enable `ALLOW_PRIVATE_TARGETS` in a hosted deployment.
-
-Start the API:
+Fill in `BACKBOARD_API_KEY` and the API authentication values in `.env`, then
+start the service:
 
 ```bash
-cd cyber-redteam-foundry
 uv run uvicorn cyberredteam.api:app --app-dir src --host 0.0.0.0 --port 8000
 ```
 
-Health check:
+Check that it is running:
 
 ```bash
 curl http://localhost:8000/health
 ```
 
-## Core release flow
+## API flow
 
-1. Create a project.
-2. Verify an HTTP target and store the ownership proof.
-3. Run an initial release assessment.
-4. Accept that release explicitly as the environment baseline.
-5. Submit a candidate release with the candidate commit and target URL.
-6. Canary executes AI-generated attack branches against the candidate.
-7. Relevant attack cases are replayed against the accepted baseline.
-8. The differential engine classifies each case as `regression`, `known`, `resolved`, or `clean`.
-9. The policy engine returns `pass`, `warn`, or `block` and persists evidence.
+For a normal campaign, send an authenticated request to:
 
-The API exposes release and regression data for CI polling and GitHub job summaries. See the detailed backend documentation in [`cyber-redteam-foundry/README.md`](cyber-redteam-foundry/README.md).
+```text
+POST /api/campaigns/run
+```
 
-## Important endpoints
+The request includes the target HTTP URL, selected attack techniques, and any
+server-side target authorization header. The response is an SSE stream with
+agent status, attack progress, findings, and a final campaign summary.
 
-- `GET /health`
-- `POST /api/projects`
-- `POST /api/projects/{project_id}/target/verify`
-- `POST /api/projects/{project_id}/releases`
-- `POST /api/ci/releases`
-- `GET /api/releases/{release_id}`
-- `GET /api/releases/{release_id}/regressions`
-- `POST /api/projects/{project_id}/baselines/{release_id}/accept`
-- `GET /api/telemetry/llm-calls`
+For release testing, Canary can:
+
+1. Register and verify a target.
+2. Run an initial assessment.
+3. Accept that release as a baseline.
+4. Test a candidate release.
+5. Replay equivalent attacks against the baseline.
+6. Classify each case as `regression`, `known`, `resolved`, or `clean`.
+7. Return a policy decision: `pass`, `warn`, or `block`.
+
+Important release endpoints include:
+
+```text
+POST /api/projects
+POST /api/projects/{project_id}/target/verify
+POST /api/projects/{project_id}/releases
+POST /api/ci/releases
+GET  /api/releases/{release_id}
+GET  /api/releases/{release_id}/regressions
+```
+
+## Telemetry
+
+Every LLM call is persisted in `llm_calls`. Stored information includes the
+complete prompt, raw response, provider/model, HTTP status, retry count,
+latency, prompt/completion/total token counts, hashes, errors, and timestamp.
+If the provider does not return token usage, Canary stores a transparent
+text-length estimate.
+
+Authenticated telemetry endpoint:
+
+```text
+GET /api/telemetry/llm-calls?limit=100
+```
+
+Prompts and responses can contain sensitive security evidence, so this endpoint
+requires the API bearer token.
+
+## Repository layout
+
+```text
+cyber-redteam-foundry/
+├── src/cyberredteam/   # FastAPI service, agents, graph, storage, security
+├── configs/             # Model and security configuration
+├── prompts/             # System prompts for the four agents
+├── migrations/          # Database migrations
+└── tests/               # Backend tests
+```
 
 ## Tests
 
@@ -118,16 +141,14 @@ cd cyber-redteam-foundry
 uv run pytest
 ```
 
-The suite covers the agent graph, API lifecycle, Backboard adapter, differential classification, gate policy, coverage, target SSRF validation, token boundaries, release execution, and storage.
+Tests cover the agent graph, HTTP target execution, Backboard adapter,
+differential classification, release lifecycle, gate policy, target validation,
+authentication boundaries, storage, and telemetry.
 
-## Scope for the next steps
+## Security notes
 
-This branch is intentionally backend-only. The next implementation steps will focus on making the release-gate workflow fully reproducible, tightening the API/storage boundaries, and validating the CompanyBot target separately. Frontend and deployment work are out of scope for this repository until requested.
-
-## Security
-
-- Never commit `.env` files, API keys, AWS credentials, or CI tokens.
-- Use project-scoped CI tokens for GitHub Actions.
-- Keep `API_SECRET_KEY`, `TOKEN_PEPPER`, and `BACKBOARD_API_KEY` server-side.
-- Verify ownership before Canary sends requests to a target.
-- Use network-level egress controls in production in addition to application URL validation.
+- Only test agents you own or are explicitly authorized to test.
+- Target URLs are validated to reduce SSRF risk.
+- Keep API keys, project tokens, and target credentials server-side.
+- Use HTTPS and network-level outbound egress controls in production.
+- Do not expose raw prompt/response telemetry to unauthenticated users.
