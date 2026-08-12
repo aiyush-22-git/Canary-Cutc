@@ -73,7 +73,7 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
       }
       const [loadedReleases, telemetryRows] = await Promise.all([
         releaseRows ? Promise.resolve(releaseRows) : getProjectReleases(activeProjectId),
-        getLlmTelemetry(50),
+        getLlmTelemetry(500),
       ])
       setReleases(loadedReleases)
       setTelemetry(telemetryRows)
