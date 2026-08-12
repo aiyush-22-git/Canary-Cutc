@@ -9,6 +9,14 @@ regressions.
 
 Live frontend: [canary-coral.vercel.app](https://canary-coral.vercel.app/)
 
+## Repository lineage
+
+This repository is the CUTC frontend and integration extension of the original
+[Auro-rium/canary](https://github.com/Auro-rium/canary) project. It keeps the
+original Canary red-team engine and adds the release-security workflow around
+it: live project/release views, baseline comparison, persisted differential
+evidence, and the Vercel frontend connected to the AWS FastAPI service.
+
 The frontend is a Vite landing experience connected to the AWS-hosted FastAPI
 backend. Its Red Team and Findings views read persisted projects, releases,
 regressions, attack evidence, and LLM telemetry from the backend database.

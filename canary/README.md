@@ -11,6 +11,11 @@ Live frontend for **Agent Canary**, connected to the AWS-hosted **Cyber Red Team
 
 Open the deployed frontend at [canary-coral.vercel.app](https://canary-coral.vercel.app/).
 
+This frontend is an extension of the original
+[Auro-rium/canary](https://github.com/Auro-rium/canary) project. It preserves
+Canary's red-team workflow while presenting its persisted release security
+evidence and telemetry through a live Vercel experience.
+
 Built with React 19 + TypeScript + Vite 8, styled with TailwindCSS and JetBrains Mono, and served via nginx in container deployments.
 
 ---
