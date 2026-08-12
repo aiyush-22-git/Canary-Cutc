@@ -36,6 +36,86 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export const getRun = (runId: string) => apiFetch<unknown>(`/api/runs/${runId}`)
 export const getRunReportMarkdown = (runId: string) => apiFetch<{ markdown: string }>(`/api/runs/${runId}/report-markdown`)
 
+// ─── Release dashboard (database-backed) ───────────────────────────────────
+export interface ProjectRecord {
+  project_id: string
+  name: string
+  slug: string
+  repository?: string | null
+  environment: string
+  endpoint: string
+  strategies: string[]
+  gate: Record<string, unknown>
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface ReleaseRecord {
+  release_id: string
+  project_id: string
+  commit_sha: string
+  ref?: string | null
+  environment: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | string
+  decision?: 'pass' | 'warn' | 'block' | null
+  baseline_release_id?: string | null
+  run_id?: string | null
+  baseline_replay_run_id?: string | null
+  baseline_score?: number | null
+  candidate_score?: number | null
+  score_delta?: number | null
+  coverage?: { percentage?: number; [key: string]: unknown }
+  summary?: { regression_counts?: Record<string, number>; [key: string]: unknown }
+  comparison?: Record<string, unknown>
+  created_at?: string | null
+  completed_at?: string | null
+}
+
+export interface ReleaseRegression {
+  regression_id: string
+  attack_case_id: string
+  classification: 'regression' | 'known' | 'resolved' | 'clean' | 'indeterminate' | string
+  severity?: string | null
+  baseline_verdict?: string | null
+  candidate_verdict?: string | null
+  baseline_evidence?: Record<string, unknown>
+  candidate_evidence?: Record<string, unknown>
+  reason?: string | null
+}
+
+export interface ReleaseReport {
+  release: ReleaseRecord
+  project: ProjectRecord
+  regressions: ReleaseRegression[]
+  findings: Array<Record<string, unknown>>
+}
+
+export interface LlmTelemetryRecord {
+  id: number
+  agent: string
+  deployment: string
+  latency_seconds: number
+  status_code?: number | null
+  retry_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  input_hash: string
+  output_hash: string
+  prompt?: string | null
+  response?: string | null
+  error?: string | null
+  timestamp?: string | null
+}
+
+export const getProjects = () => apiFetch<ProjectRecord[]>('/api/projects')
+export const getProjectReleases = (projectId: string) =>
+  apiFetch<ReleaseRecord[]>(`/api/projects/${encodeURIComponent(projectId)}/releases`)
+export const getReleaseReport = (releaseId: string) =>
+  apiFetch<ReleaseReport>(`/api/releases/${encodeURIComponent(releaseId)}/report`)
+export const getLlmTelemetry = (limit = 100) =>
+  apiFetch<LlmTelemetryRecord[]>(`/api/telemetry/llm-calls?limit=${limit}`)
+
 // ─── Findings ───────────────────────────────────────────────────────────────
 export const getFindings = (query: string) => apiFetch<unknown[]>(`/api/findings?${query}`)
 export const getFinding = (findingId: string) => apiFetch<unknown>(`/api/findings/${findingId}`)
