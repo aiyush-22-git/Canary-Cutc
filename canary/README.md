@@ -7,47 +7,38 @@
 [![nginx](https://img.shields.io/badge/nginx-1.25--alpine-009639.svg)](https://nginx.org/)
 [![Docker](https://img.shields.io/badge/Docker-multi--stage-2496ed.svg)](https://www.docker.com/)
 
-Real-time dashboard for the **Cyber Red Team Foundry** backend, built with React 19 + TypeScript + Vite 8. Styled with TailwindCSS and JetBrains Mono, served via nginx, communicating over REST and Server-Sent Events.
+Live frontend for **Agent Canary**, connected to the AWS-hosted **Cyber Red Team Foundry** FastAPI backend. The landing page, Red Team view, and Findings view read persisted release security data over the server-side Vercel proxy.
+
+Open the deployed frontend at [canary-coral.vercel.app](https://canary-coral.vercel.app/).
+
+Built with React 19 + TypeScript + Vite 8, styled with TailwindCSS and JetBrains Mono, and served via nginx in container deployments.
 
 ---
 
 ## Pages
 
-### RunAuditPage — `/audit`
+### Landing page
 
-Campaign launch and live monitoring.
+The original cinematic landing page is the primary entry point. Its console is
+live: release decision, coverage, strategy count, LLM calls, token totals,
+project, target, and persisted evidence are loaded from AWS.
 
-- Submits `POST /api/campaigns/run` with target URL, attack strategies, and intensity.
-- Opens SSE stream for live events; renders 4-node agent topology with animated edges.
-- Three phases: **CONFIG → RUNNING → REPORT**.
-- Final report: campaign_id, run_id, finding counts (by severity), duration, target.
-- Requires the authenticated backend; failed requests are shown as errors and never replaced with fabricated findings.
-
-**SSE event types** emitted by `POST /api/campaigns/run`:
-
-| Event | Payload summary |
-|---|---|
-| `agent_state` | Agent name + current state (idle, active, complete) — drives topology animation |
-| `log` | Free-text log line from any agent |
-| `finding` | Structured finding: id, severity, title, description |
-| `campaign_complete` | Terminal event: campaign_id, run_id, summary counts, duration |
+The `Run Security Check` control submits a candidate commit SHA to the release
+gate. It does not deploy code; the backend attacks the configured candidate,
+replays the accepted baseline, and persists the comparison.
 
 ### FindingsPage — `/findings`
 
-Paginated findings review with status management.
-
-- Filters by `severity`, `status`, `asi_class`.
-- Verdict badges lazy-fetch details and render confidence score + verdict path.
-- Status transitions (`PUT /api/findings/{id}/status`) require `reviewer_id` + `rationale`.
-- Attempts table from `GET /api/findings/{id}/attempts`.
+Database-backed cross-release outcomes. It filters `regression`, `known`,
+`resolved`, `clean`, and `indeterminate` classifications and expands each
+result to show its attack prompt, verdicts, and classification rationale.
 
 ### RedTeamPage — `/redteam`
 
-Live incident feed and run detail panel.
-
-- Polls `GET /api/incidents` every 30 seconds.
-- Row click opens detail panel from `GET /api/runs/{run_id}`.
-- Attacks table with humanized strategy labels and finding IDs (linkable to FindingsPage).
+Database-backed differential evidence browser. It shows projects, security
+checks, PASS/WARN/BLOCK decisions, scores, coverage, attack prompts, baseline
+responses, candidate responses, evaluator rationale, and classification for
+every persisted attack case.
 
 ---
 
@@ -63,17 +54,15 @@ canary/
 ├── package.json
 └── src/
     ├── main.tsx
-    ├── App.tsx              # View switch: home, audit, findings, redteam
+    ├── App.tsx              # View switch: home, findings, redteam
     ├── components/
     │   ├── Navbar.tsx
     │   ├── Hero.tsx
-    │   └── AgentGraphPanel.tsx      # agent topology SVG used by RunAuditPage
     ├── lib/
     │   ├── api.ts                  # single client for every backend endpoint
     │   ├── techniques.ts           # attack technique catalogue
     │   └── types.ts                # shared domain types (Phase, FindingPayload, ...)
     └── pages/
-        ├── RunAuditPage.tsx
         ├── FindingsPage.tsx
         └── RedTeamPage.tsx
 ```
@@ -99,12 +88,14 @@ No external UI component library. All UI is hand-built with Tailwind utility cla
 
 | Variable | Description | Default |
 |---|---|---|
-| `VITE_API_URL` | Backend base URL | `""` (relative — nginx proxies) |
-| `VITE_API_TOKEN` | Bearer token; must match `API_SECRET_KEY` on the backend | — |
+| `VITE_API_URL` | Optional backend base URL for local development | `""` (relative proxy) |
+| `VITE_API_TOKEN` | Optional local-development bearer token | — |
 
 When `VITE_API_URL` is empty (the default), all `/api/*` requests are relative and nginx routes them to `redteam-backend:8001`. In dev, Vite's proxy handles the same routing to `http://localhost:8001`.
 
-All requests include `Authorization: Bearer <VITE_API_TOKEN>`.
+The hosted Vercel deployment uses server-only `CANARY_API_URL` and
+`CANARY_API_TOKEN` variables in its proxy. The browser never receives the
+backend credential.
 
 ---
 

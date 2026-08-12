@@ -7,6 +7,12 @@ reproducible evidence with a `PASS`, `WARN`, or `BLOCK` decision.
 Traditional CI catches code regressions. Canary catches AI-agent behavior
 regressions.
 
+Live frontend: [canary-coral.vercel.app](https://canary-coral.vercel.app/)
+
+The frontend is a Vite landing experience connected to the AWS-hosted FastAPI
+backend. Its Red Team and Findings views read persisted projects, releases,
+regressions, attack evidence, and LLM telemetry from the backend database.
+
 > Agent Canary tells you whether the AI agent you are about to ship is less
 > secure than the one you already trust.
 
