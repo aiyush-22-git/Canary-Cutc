@@ -25,7 +25,19 @@ The backend currently includes:
 - SQLite local persistence, with PostgreSQL/Redis/RQ configuration for hosted execution
 - release-gate and GitHub Action support in the source tree
 
-The active LLM configuration is server-side Backboard. No provider key belongs in frontend code or committed files. The active runtime has no Bedrock or in-process target-agent path; all agent model calls use Backboard.
+The active LLM configuration is server-side Backboard using OpenRouter and
+`openai/gpt-5.6-luna`. No provider key belongs in frontend code or committed
+files. The active runtime has no Bedrock or in-process target-agent path; all
+agent model calls use Backboard.
+
+Every LLM call persists full prompt and raw response telemetry, provider/model,
+HTTP status, retries, latency, prompt/completion/total token counts, hashes,
+errors, and timestamp. Provider usage metadata is used when available;
+otherwise a transparent text-length estimate is stored. Authenticated access:
+
+```text
+GET /api/telemetry/llm-calls?limit=100
+```
 
 ## Repository layout
 
@@ -55,7 +67,7 @@ Set `BACKBOARD_API_KEY` in the server environment. The key is created in Backboa
 
 ```dotenv
 BACKBOARD_LLM_PROVIDER=openrouter
-BACKBOARD_MODEL_NAME=moonshotai/kimi-k2.6
+BACKBOARD_MODEL_NAME=openai/gpt-5.6-luna
 ```
 
 For local-only development, configure `DATABASE_URL` empty to use SQLite and keep `RELEASE_EXECUTION_MODE=thread`. Do not enable `ALLOW_PRIVATE_TARGETS` in a hosted deployment.
@@ -97,6 +109,7 @@ The API exposes release and regression data for CI polling and GitHub job summar
 - `GET /api/releases/{release_id}`
 - `GET /api/releases/{release_id}/regressions`
 - `POST /api/projects/{project_id}/baselines/{release_id}/accept`
+- `GET /api/telemetry/llm-calls`
 
 ## Tests
 

@@ -45,6 +45,7 @@ from cyberredteam.storage.models import (
     AcceptedBaselineRecord,
     AttackRecord,
     FindingRecord,
+    LLMCallRecord,
     ProjectRecord,
     ProjectTokenRecord,
     ReleaseRecord,
@@ -559,6 +560,19 @@ def get_status():
         "database_exists": db_exists,
         "report_directory": str(settings.report_output_dir),
     }
+
+
+@app.get("/api/telemetry/llm-calls")
+def get_llm_telemetry(limit: int = 100):
+    """Return authenticated full LLM prompt/response telemetry."""
+    limit = max(1, min(limit, 500))
+    store = SQLiteStore(settings.database_location)
+    try:
+        with store.SessionLocal() as session:
+            rows = session.scalars(select(LLMCallRecord).order_by(LLMCallRecord.id.desc()).limit(limit)).all()
+            return [{"id": r.id, "agent": r.agent_name, "deployment": r.deployment, "latency_seconds": r.latency, "status_code": r.status_code, "retry_count": r.retry_count, "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens, "total_tokens": r.total_tokens, "input_hash": r.input_hash, "output_hash": r.output_hash, "prompt": r.input_text, "response": r.output_text, "error": r.error, "timestamp": r.timestamp.isoformat() if r.timestamp else None} for r in rows]
+    finally:
+        store.close()
 
 
 @app.get("/health")

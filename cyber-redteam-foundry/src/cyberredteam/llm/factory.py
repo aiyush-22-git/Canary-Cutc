@@ -19,7 +19,7 @@ logger = setup_logging()
 
 # Default Backboard/OpenRouter model per agent.
 # Overridable per agent via configs/models.yaml.
-_DEFAULT_MODELS = {agent: {"model": os.getenv("BACKBOARD_MODEL_NAME", "moonshotai/kimi-k2.6")} for agent in ("strategist", "attacker", "evaluator", "reporter")}
+_DEFAULT_MODELS = {agent: {"model": os.getenv("BACKBOARD_MODEL_NAME", "openai/gpt-5.6-luna")} for agent in ("strategist", "attacker", "evaluator", "reporter")}
 
 _models_config: Optional[dict] = None
 
