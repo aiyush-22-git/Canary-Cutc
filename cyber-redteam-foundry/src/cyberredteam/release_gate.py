@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from cyberredteam.evaluation.differential import (
     AttackExecution as DifferentialExecution,
@@ -175,7 +175,13 @@ def upsert_ci_project(session, data: dict[str, Any]) -> ProjectRecord:
     run. Secrets are deliberately not accepted or stored in this model.
     """
     repository = data["repository"].strip().lower()
-    project = session.scalar(select(ProjectRecord).where(ProjectRecord.repository == repository))
+    # GitHub repository names are case-insensitive.  Normalize the stored
+    # identity during lookup so a project token bound to an existing
+    # dashboard project cannot be bypassed or rejected merely because the
+    # Action supplied a different owner/repository casing.
+    project = session.scalar(
+        select(ProjectRecord).where(func.lower(ProjectRecord.repository) == repository)
+    )
     if project is None:
         project = create_project(
             session,
