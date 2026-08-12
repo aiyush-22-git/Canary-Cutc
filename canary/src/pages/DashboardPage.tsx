@@ -52,7 +52,18 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
     try {
       const projectRows = await getProjects()
       setProjects(projectRows)
-      const activeProjectId = requestedProjectId || projectId || projectRows[0]?.project_id || ''
+      let activeProjectId = requestedProjectId || projectId
+      let releaseRows: ReleaseRecord[] | undefined
+      if (!activeProjectId && projectRows.length) {
+        const releaseGroups = await Promise.all(projectRows.map((item) => getProjectReleases(item.project_id)))
+        const mostRecentIndex = releaseGroups.reduce((bestIndex, group, index) => {
+          const candidate = group[0]?.created_at || ''
+          const current = releaseGroups[bestIndex]?.[0]?.created_at || ''
+          return candidate > current ? index : bestIndex
+        }, 0)
+        activeProjectId = projectRows[mostRecentIndex]?.project_id || projectRows[0]?.project_id || ''
+        releaseRows = releaseGroups[mostRecentIndex] || []
+      }
       setProjectId(activeProjectId)
       if (!activeProjectId) {
         setReleases([])
@@ -60,13 +71,13 @@ export default function DashboardPage({ onRunAudit, onFindings, onRedTeam }: Das
         setTelemetry([])
         return
       }
-      const [releaseRows, telemetryRows] = await Promise.all([
-        getProjectReleases(activeProjectId),
+      const [loadedReleases, telemetryRows] = await Promise.all([
+        releaseRows ? Promise.resolve(releaseRows) : getProjectReleases(activeProjectId),
         getLlmTelemetry(50),
       ])
-      setReleases(releaseRows)
+      setReleases(loadedReleases)
       setTelemetry(telemetryRows)
-      const latest = releaseRows[0]
+      const latest = loadedReleases[0]
       setSelectedRelease(latest ? await getReleaseReport(latest.release_id) : null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load the Canary database')
